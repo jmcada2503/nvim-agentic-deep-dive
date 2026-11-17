@@ -385,7 +385,7 @@ end
 local function bars()
   local esc = function(s) return (s:gsub('%%', '%%%%')) end
   vim.wo[W.main].winbar = '%#DDMode# ' .. (S.mode == 'map' and 'MAP' or 'ZEN') .. ' %#DDCrumbs# %<' .. esc(crumbs(S.sel)) ..
-      ' %=%#DDKey# ? %#DDCrumbs# help '
+      ' %=%#DDKey# ⇥ %#DDCrumbs# tab  %#DDKey# ? %#DDCrumbs# help '
   local wb = M.hooks.winbar and M.hooks.winbar()
   if wb then vim.wo[W.main].winbar = wb end
   local e = cur_edge()
@@ -971,7 +971,7 @@ local function setkeys(buf)
   map('d', act_diff)
   -- PROTOTYPE qa-revisions: keys the active variant may claim; unclaimed ones fall back to the base action
   local BASE = { a = act_ask, r = act_repo, ['<Esc>'] = function() if S.port or S.overlay then leave() end end }
-  for _, k in ipairs({ 'a', 'A', 'p', 'y', 'x', 'R', 'Q', 'H', 'W', 'X', 'D', 't', 'K', '!', 'n', 'N', '[r', ']r', '{', '}', '<Esc>',
+  for _, k in ipairs({ 'a', 'A', 'p', 'y', 'x', 'R', 'Q', 'H', 'W', 'X', 't', 'T', '<Tab>', 'K', '!', 'n', 'N', '[r', ']r', '{', '}', '<Esc>',
     'r', 's', 'e', 'S', 'L', 'u', 'b', 'B' }) do -- PROTOTYPE boundary: s e S L u b B r
     map(k, function()
       local f = M.vkeys[k]

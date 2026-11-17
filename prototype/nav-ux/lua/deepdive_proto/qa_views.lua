@@ -108,11 +108,8 @@ end
 -- =====================================================================
 local A = { key = 'A', name = 'Tabs in the details pane', tab = 'details', dive = false, revrow = {}, mark = nil, dkeys = false }
 -- PROTOTYPE boundary: A.extra (set by bd_views) may add tabs, tab names, content, prompt and hint-bar chips
-local function TABS_()
-  local t = { 'details', 'thread', 'fix', 'revs' }
-  if A.extra then for _, x in ipairs(A.extra.tabs()) do table.insert(t, x.pos or #t + 1, x.key) end end
-  return t
-end
+-- four short tabs, always the same: Info · Ask · Run (the dive and Fix runs) · Revs
+local function TABS_() return { 'details', 'thread', 'fix', 'revs' } end
 local function a_focus() return A.dive and C.DIVE or focus() end
 local function a_tabname(t)
   local xn = A.extra and A.extra.tabname(t)
@@ -120,15 +117,15 @@ local function a_tabname(t)
   if t == 'thread' then
     local f = a_focus()
     local th = C.threads[f.key]
-    return 'Thread' .. (f.kind == 'dive' and ' ◎' or '') .. (th and (' ' .. #th.msgs) or '')
+    return 'Ask' .. (f.kind == 'dive' and ' ◎' or '') .. (th and (' ' .. #th.msgs) or '')
   elseif t == 'fix' then
-    if C.pending then return 'Review r' .. C.pending.n .. ' ●' end
-    if C.fix then return failed() and 'Fix run ✗' or 'Fix run ⟳' end
-    return 'Fix run'
+    if C.pending then return 'Run ●' end
+    if C.fix then return failed() and 'Run ✗' or 'Run ⟳' end
+    return 'Run'
   elseif t == 'revs' then
-    return 'Revisions ' .. #C.revisions .. (C.ov and not C.ov.pending and ' ◐' or '')
+    return 'Revs ' .. #C.revisions .. (C.ov and not C.ov.pending and ' ◐' or '')
   end
-  return 'Details'
+  return 'Info'
 end
 local function a_has_prompt() return A.tab == 'thread' or A.tab == 'fix' or (A.extra and A.extra.has_prompt(A.tab)) or false end
 local function a_in_prompt() return valid(A.iw) and api.nvim_get_current_win() == A.iw end
@@ -158,7 +155,7 @@ local function a_hintbar()
       left = '%#DDAgent# ask %#Normal# ' .. esc(who) .. '  '
     end
     if insert then
-      right = chip('⏎', 'send') .. chip('⇥', A.dive and 'selection' or 'whole dive') .. chip('Esc', 'actions')
+      right = chip('⏎', 'send') .. chip('^A', A.dive and 'selection' or 'whole dive') .. chip('⇥', 'graph') .. chip('Esc', 'actions')
     else
       local p = latest_prop(f)
       if C.pending then
@@ -169,8 +166,8 @@ local function a_hintbar()
         right = chip('y', 'accept ' .. p.id) .. chip('x', 'dismiss') .. chip('R', 'reply')
       end
       -- state-specific actions first; the generic ones only when there is room
-      if right == '' then right = chip('i', 'type') .. chip('p', 'problem') .. chip('⇥', A.dive and 'selection' or 'whole dive') .. chip('q', 'graph')
-      else right = right .. chip('i', 'type') .. chip('q', 'graph') end
+      if right == '' then right = chip('i', 'type') .. chip('p', 'problem') .. chip('^A', A.dive and 'selection' or 'whole dive') .. chip('⇥', 'graph')
+      else right = right .. chip('i', 'type') .. chip('⇥', 'graph') end
     end
   end
   vim.wo[A.iw].winbar = left .. '%=' .. right
@@ -201,7 +198,8 @@ local function a_winbar()
   for _, t in ipairs(tabs) do
     s = s .. (t == A.tab and '%#DDTabSel#' or '%#DDTab#') .. ' ' .. a_tabname(t) .. ' %#Normal# '
   end
-  vim.wo[U.W.det].winbar = s .. '%=' .. chip('t', 'next tab') .. chip('D', 'revisions')
+  local here = api.nvim_get_current_win() == U.W.det or (valid(A.iw) and api.nvim_get_current_win() == A.iw)
+  vim.wo[U.W.det].winbar = s .. '%=' .. chip('t T', 'tab') .. chip('⇥', here and 'graph' or 'focus')
   vim.wo[U.W.det].statusline = A.tab == 'revs' and A.revs_bar() or ' '
   a_prompt_win()
   api.nvim_win_set_height(U.W.det, (A.tab == 'details' and not (A.extra and A.extra.tall(A.tab))) and 14 or 21)
@@ -220,7 +218,7 @@ function A.details()
     local th = C.threads[f.key]
     if not th then
       c.add('')
-      c.add(' No questions here yet. Type below to ask' .. (f.kind == 'dive' and ' about the whole dive.' or ', or ⇥ for the whole dive.'), 'Comment')
+      c.add(' No questions here yet. Type below to ask' .. (f.kind == 'dive' and ' about the whole dive.' or ', or ^A for the whole dive.'), 'Comment')
     else
       for _, m in ipairs(th.msgs) do c.add(''); C.render_msg(c, m, w, ' ', { keys = 'see the bar below' }) end
     end
@@ -228,6 +226,14 @@ function A.details()
     for k, t in pairs(C.threads) do if k ~= f.key then others[#others + 1] = t.focus.label .. ' (' .. #t.msgs .. ')' end end
     if #others > 0 then c.add(''); c.add(' other threads  ' .. table.concat(others, ' · '), 'Comment') end
   elseif A.tab == 'fix' then
+    A.render_fix(c, w)
+  elseif A.tab == 'revs' then
+    A.render_revs(c, w)
+  end
+  return c.lines, c.hls
+end
+function A.render_fix(c, w)
+  do
     if C.pending then
       C.render_review(c, w, ' ', nil)
       c.add(' (the graph shows the change)', 'Comment')
@@ -242,7 +248,10 @@ function A.details()
       local q = vim.tbl_filter(function(p) return p.status == 'queued' end, C.proposals)
       if #q > 0 then c.add(' queued: ' .. #q, 'Comment') end
     end
-  elseif A.tab == 'revs' then
+  end
+end
+function A.render_revs(c, w)
+  do
     c.add(' graph colours', 'Comment')
     local r = #c.lines - 1
     c.lines[r + 1] = c.lines[r + 1] .. '   + added  ~ changed  - removed  ▒ has changes inside'
@@ -262,9 +271,8 @@ function A.details()
       c.hl(r2, on and 'DDCardTitle' or 'DDDim', 1, 2)
       A.revrow[r2] = rv.n
     end
-    if C.pending then c.add(string.format('   r%-2d %-11s %s', C.pending.n, C.pending.kind, 'pending: see the Review tab'), 'DiagnosticHint') end
+    if C.pending then c.add(string.format('   r%-2d %-11s %s', C.pending.n, C.pending.kind, 'pending: see the Run tab'), 'DiagnosticHint') end
   end
-  return c.lines, c.hls
 end
 local function a_redraw()
   if not U.panel_open() then return end
@@ -273,7 +281,9 @@ local function a_redraw()
   -- chat-like: keep the newest message in view unless the user is reading the pane
   if a_has_prompt() and api.nvim_get_current_win() ~= U.W.det then
     -- a Pending revision reads top-down (reason first); threads and Fix-run logs follow the newest line
-    local top = A.tab == 'fix' and C.pending
+    local top
+    if A.extra and A.extra.top then top = A.extra.top(A.tab) end
+    if top == nil then top = A.tab == 'fix' and C.pending end
     pcall(api.nvim_win_set_cursor, U.W.det, { top and 1 or api.nvim_buf_line_count(U.W.dbuf), 0 })
     if top then api.nvim_win_call(U.W.det, function() vim.fn.winrestview({ topline = 1 }) end) end
   end
@@ -285,7 +295,7 @@ function A.revs_bar()
   local shown = C.ov and not C.ov.pending and C.ov_label()
   return '%#DDMode# REVISIONS %#Normal# graph shows ' .. (shown and ('%#DDCardTitle#' .. shown .. '%#Normal#') or 'nothing') ..
     '%=' .. chip('j k', 'next / prev revision') .. chip('V', 'range') ..
-    chip('⏎', 'keep on graph') .. chip('q', 'close')
+    chip('⏎', 'keep on graph') .. chip('q', 'close') .. chip('⇥', 'graph, keep')
 end
 local function a_revs_preview()
   if V.cur() ~= A or A.tab ~= 'revs' or not U.panel_open() or api.nvim_get_current_win() ~= U.W.det then return end
@@ -348,6 +358,49 @@ local function a_revs_leave(keep)
   if keep then gsync() elseif U.panel_open() then U.sync { nojump = true } end
 end
 local function a_dive(on) if A.dive ~= on then A.dive = on; gsync() end end
+
+-- t / T: next / previous tab from the graph, the pane or the prompt; focus stays where it is
+local function a_cycle(d)
+  local T = TABS_()
+  local i = 1
+  for k, t in ipairs(T) do if t == A.tab then i = k end end
+  local nxt = T[(i - 1 + d) % #T + 1]
+  local cur = api.nvim_get_current_win()
+  local in_pane = U.panel_open() and (cur == U.W.det or (valid(A.iw) and cur == A.iw))
+  if A.tab == 'revs' then
+    if vim.fn.mode():match('^[vV\22]') then vim.cmd('normal! \27') end
+    if C.ov and not C.ov.pending then C.ov = nil end
+    A.prev_sel = nil
+  end
+  vim.cmd('stopinsert')
+  A.imode = nil
+  A.tab = nxt
+  if nxt == 'revs' then A.prev_sel = U.S.sel end
+  gsync()
+  a_redraw()
+  if not U.panel_open() then return end
+  if in_pane and not (valid(A.iw) and api.nvim_get_current_win() == A.iw) then api.nvim_set_current_win(U.W.det) end
+  if nxt == 'revs' and #C.revisions > 0 then
+    local last
+    for row, n in pairs(A.revrow) do if n == #C.revisions and (not last or row < last) then last = row end end
+    pcall(api.nvim_win_set_cursor, U.W.det, { (last or 0) + 1, 0 })
+    if in_pane then a_revs_preview() end
+  end
+end
+-- ⇥: graph <-> the focused tab (from the prompt or any card: back to the graph)
+local function a_toggle()
+  if not U.panel_open() then return end
+  if api.nvim_get_current_win() == U.W.main then
+    api.nvim_set_current_win(U.W.det)
+    if A.tab == 'revs' then a_revs_preview() end
+  else
+    if vim.fn.mode():match('^[vV\22]') then vim.cmd('normal! \27') end
+    vim.cmd('stopinsert')
+    A.imode = nil
+    api.nvim_set_current_win(U.W.main)
+  end
+  a_winbar()
+end
 
 -- the prompt: open the thread tab and put the cursor in the chat input
 local function a_prompt(tab, imode, prefill)
@@ -414,13 +467,15 @@ local function a_prompt_keys()
   local b = A.ibuf
   for _, m in ipairs({ 'n', 'i' }) do
     bmap(b, '<CR>', a_send, m)
-    bmap(b, '<Tab>', function() a_dive(not A.dive); a_redraw() end, m)
+    bmap(b, '<Tab>', a_toggle, m)
+    bmap(b, '<C-a>', function() a_dive(not A.dive); a_redraw() end, m)
   end
   bmap(b, '<Esc>', function() vim.cmd('stopinsert'); if A.imode then A.imode = nil end; vim.schedule(a_hintbar) end, 'i')
   for k, fn in pairs(ACTA) do bmap(b, k, fn) end
   bmap(b, 'q', back_to_graph)
   bmap(b, '<Esc>', back_to_graph)
-  bmap(b, 't', function() A.keys.t() end)
+  bmap(b, 't', function() a_cycle(1) end)
+  bmap(b, 'T', function() a_cycle(-1) end)
   bmap(b, 'g', function() if valid(U.W.det) then cite_at(A.cv, U.W.det) end end)
   api.nvim_create_autocmd({ 'InsertEnter', 'InsertLeave', 'WinEnter', 'WinLeave' }, { buffer = b, callback = function() vim.schedule(a_hintbar) end })
 end
@@ -438,7 +493,9 @@ local function a_det_keys()
       elseif U.panel_open() then api.nvim_set_current_win(U.W.main) end
     end,
     g = function() cite_at(A.cv, 0) end,
-    t = function() A.keys.t() end,
+    t = function() a_cycle(1) end,
+    T = function() a_cycle(-1) end,
+    ['<Tab>'] = a_toggle,
     i = function() if a_has_prompt() then a_prompt() end end,
     y = ACTA.y, x = ACTA.x, R = ACTA.R, Q = ACTA.Q, H = ACTA.H, W = ACTA.W, X = ACTA.X,
   }
@@ -446,8 +503,8 @@ local function a_det_keys()
   A.dk[#A.dk + 1] = 'j'; A.dk[#A.dk + 1] = 'k'
   for k, fn in pairs(K) do bmap(b, k, function() if V.cur() == A then fn() end end) end
   -- the same keys while a V range is selected
-  for k, fn in pairs({ ['<CR>'] = K['<CR>'], q = K.q }) do bmap(b, k, function() if V.cur() == A then fn() end end, 'x') end
-  A.dkx = { '<CR>', 'q', 'j', 'k' }
+  for k, fn in pairs({ ['<CR>'] = K['<CR>'], q = K.q, ['<Tab>'] = a_toggle }) do bmap(b, k, function() if V.cur() == A then fn() end end, 'x') end
+  A.dkx = { '<CR>', 'q', 'j', 'k', '<Tab>' }
   for _, k in ipairs({ 'j', 'k' }) do
     vim.keymap.set({ 'n', 'x' }, k, function()
       if V.cur() ~= A then return k end
@@ -460,16 +517,9 @@ A.keys = {
   a = function() a_dive(false); a_prompt('thread') end,
   A = function() a_dive(true); a_prompt('thread') end,
   p = a_problem, y = ACTA.y, x = ACTA.x, R = ACTA.R, Q = ACTA.Q, H = ACTA.H, W = ACTA.W, X = ACTA.X,
-  D = a_revs_enter,
-  t = function()
-    local i = 1
-    local TABS = TABS_()
-    for k, t in ipairs(TABS) do if t == A.tab then i = k end end
-    local nxt = TABS[i % #TABS + 1]
-    if nxt == 'revs' then return a_revs_enter() end
-    if A.tab == 'revs' then a_revs_leave(false) end
-    a_tab(nxt)
-  end,
+  t = function() a_cycle(1) end,
+  T = function() a_cycle(-1) end,
+  ['<Tab>'] = a_toggle,
   ['<Esc>'] = function()
     if A.dive then a_dive(false); a_redraw()
     elseif C.ov and not C.ov.pending then C.ov = nil; gsync()
@@ -514,11 +564,12 @@ function A.deactivate()
   A.dkeys = false
 end
 A.help = {
-  { 'Q&A (A: tabs)' }, { 't', 'next details tab' }, { 'a', 'thread of selection + prompt' }, { 'A', 'whole-dive thread + prompt' },
+  { 'PANE' }, { '⇥', 'graph ↔ tab (also from prompt)' }, { 't T', 'next / previous tab' },
+  { 'Q&A' }, { 'a', 'Ask: selection + prompt' }, { 'A', 'Ask: whole dive + prompt' }, { '^A', 'prompt: selection ↔ whole dive' },
   { 'p', 'report a problem' }, { 'y', 'accept proposal / revision' }, { 'x', 'dismiss / reject' },
   { 'R', 'reply / reject with note' }, { 'Q H W X', 'stuck: ask, hint, widen, abandon' },
-  { 'REVISIONS (A)' }, { 'D', 'open list (or t to the tab)' }, { 'j k', 'preview on graph' }, { 'V', 'select a range' },
-  { '⏎', 'keep on graph, back' }, { 'q Esc', 'close, colours off' },
+  { 'REVS TAB' }, { 'j k', 'preview on graph' }, { 'V', 'select a range' },
+  { '⏎ ⇥', 'keep on graph, back' }, { 'q Esc', 'colours off, back' },
 }
 
 -- =====================================================================
@@ -945,7 +996,8 @@ Cv.help = {
 local VARS = { A }
 function V.cur() return VARS[V.i] end
 V.A = A
-V.api = { prompt = function(...) return a_prompt(...) end, redraw = function() return a_redraw() end,
+V.api = { render_fix = function(c, w) return A.render_fix(c, w) end, cycle = function(d) return a_cycle(d) end,
+  toggle = function() return a_toggle() end, prompt = function(...) return a_prompt(...) end, redraw = function() return a_redraw() end,
   tab = function(t) return a_tab(t) end, chip = chip, esc = esc, hintbar = function() return a_hintbar() end,
   gsync = gsync, focus = focus, cite_at = cite_at, bmap = bmap, scratch = scratch, winopts = winopts, valid = valid,
   back_to_graph = function() return back_to_graph() end }

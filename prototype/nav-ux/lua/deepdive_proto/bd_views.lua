@@ -1,8 +1,9 @@
 -- PROTOTYPE (throwaway): three radically different layouts for Boundaries, the dive's needs_input pause and
 -- "specify repo", on top of the Q&A variant A conventions (tabs in the details pane, prompt + hint bar, badges).
---   A  Details + Dive tab   the Boundary's facts and choices live in its Details tab; the dive log + question get a
---                           "Dive" tab; specify repo = the prompt, prefilled with the agent's guess (^X^F completes)
---   B  Boundaries inbox     one "Boundaries" tab lists every Boundary by status (needs you / unresolved / settled);
+-- Tabs are always Info · Ask · Run · Revs; Run holds the staged dive and any Fix run. ⇥ graph <-> tab, t / T cycle.
+--   A  Info + Run          the Boundary's facts and choices live in its Info tab; the dive log + question sit in
+--                           Run; specify repo = the prompt, prefilled with the agent's guess (^X^F completes)
+--   B  Inbox in Run         Run lists every Boundary by status (needs you / unresolved / settled);
 --                           moving the cursor walks the map; specify repo = a picker float
 --   C  On the map           a dotted "far side" ghost next to each Boundary box; the question is a card under the
 --                           box; specify repo picks inside the card; the dive streams into the card
@@ -83,12 +84,17 @@ local function status_left(id, s)
   return '%#' .. lb[2] .. '# ' .. short .. ' %#Normal# ' .. esc(U.trunc(title(id), 26)) .. '  '
 end
 
+local function run_name(t)
+  if t ~= 'fix' or C.fix or C.pending then return nil end
+  return 'Run' .. ({ paused = ' ⏸', running = ' ⟳', done = '' })[B.dive.state]
+end
+
 -- =====================================================================
--- A: Details + Dive tab, answers through the prompt
+-- A: Info + Run, answers through the prompt
 -- =====================================================================
-local VA = { key = 'A', name = 'Details + Dive tab (prompt)' }
+local VA = { key = 'A', name = 'Info + Run (prompt)' }
 local function va_id()
-  if QA.tab == 'build' then return B.q and B.q.step end
+  if QA.tab == 'fix' then return B.q and B.q.step end
   return sel_bd()
 end
 local function va_specify(id)
@@ -98,21 +104,21 @@ local function va_specify(id)
   if sel() ~= id then U.select(id) end
   local info = B.info[id] or {}
   local pre = info.guess and info.guess.kind == 'repo' and info.guess.path or (G.root .. '/')
-  X.prompt(QA.tab == 'build' and 'build' or 'details', {
+  X.prompt(QA.tab == 'fix' and 'fix' or 'details', {
     label = 'repo path for “' .. U.trunc(title(id), 22) .. '”', chips = chip('^X^F', 'complete'),
     send = function(text) with_path(id, text) end }, pre)
 end
 VA.extra = {
-  tabs = function() return { { key = 'build', pos = 2 } } end,
-  tabname = function(t)
-    if t == 'build' then return 'Dive ' .. ({ paused = '⏸', running = '⟳', done = '✓' })[B.dive.state] end
-  end,
-  has_prompt = function(t) return t == 'build' or (t == 'details' and sel_bd() ~= nil) end,
+  tabname = run_name,
+  has_prompt = function(t) return t == 'details' and sel_bd() ~= nil end,
   tall = function(t) return t == 'details' and sel_bd() ~= nil end,
   render = function(t, c, w)
-    if t == 'build' then
-      B.render_dive(c, w, ' ')
+    if t == 'fix' then
+      -- a review reads top-down; a running Fix run or the dive log follows its newest line
+      if C.pending then X.render_fix(c, w); c.add('') end
+      B.render_dive(c, w, ' ', C.fix ~= nil)
       if B.q then c.add(''); B.render_question(c, w, ' ') end
+      if C.fix and not C.pending then c.add(''); X.render_fix(c, w) end
       return true
     end
     local id = t == 'details' and sel_bd()
@@ -131,28 +137,29 @@ VA.extra = {
       c.add('   specify repo: a number, or s to type a path', 'Comment')
       B.render_cands(c, id, w, '   ')
     elseif s == 'reading' then
-      c.add(''); c.add('   ⟳ the dive is reading it: see the Dive tab', 'DiagnosticInfo')
+      c.add(''); c.add('   ⟳ the dive is reading it: see the Run tab', 'DiagnosticInfo')
     elseif s == 'extending' or s == 'pending' then
-      c.add(''); c.add('   ' .. B.LABEL[s][1] .. ': see the ' .. (s == 'pending' and 'Review' or 'Fix run') .. ' tab', B.LABEL[s][2])
+      c.add(''); c.add('   ' .. B.LABEL[s][1] .. ': see the Run tab', B.LABEL[s][2])
     end
     return true
   end,
   hint = function(t, insert)
     if insert then return nil end
-    if t == 'build' and not B.q then
-      if B.dive.state == 'running' then return '%#DiagnosticInfo# ⟳ dive running %#Normal# ', chip('q', 'graph') end
-      return '%#DiagnosticOk# ✓ dive done %#Normal# ', chip('t', 'next tab') .. chip('q', 'graph')
+    if t == 'fix' and (C.fix or C.pending) then return nil end
+    if t == 'fix' and not B.q then
+      if B.dive.state == 'running' then return '%#DiagnosticInfo# ⟳ dive running %#Normal# ', chip('⇥', 'graph') end
+      return '%#DiagnosticOk# ✓ dive done %#Normal# ', chip('t', 'next tab') .. chip('⇥', 'graph')
     end
     local id = va_id()
-    if not id or (t ~= 'build' and t ~= 'details') then return nil end
+    if not id or (t ~= 'fix' and t ~= 'details') then return nil end
     local s = B.status(id)
-    return status_left(id, s), status_chips(id, s, #B.candidates(id), 'type path') .. chip('q', 'graph')
+    return status_left(id, s), status_chips(id, s, #B.candidates(id), 'type path') .. chip('⇥', 'graph')
   end,
 }
 local function va_goto()
   if not G.waiting then return warn('the dive is not waiting') end
   U.select(G.waiting)
-  X.tab('build')
+  X.tab('fix')
 end
 VA.keys = {
   s = va_specify, r = va_specify,
@@ -165,12 +172,12 @@ for n = 1, 9 do VA.dkeys[tostring(n)] = function() pick_n(va_id(), n) end end
 VA.pkeys = VA.dkeys -- the prompt buffer, in normal mode
 function VA.render(what)
   if B.q and VA.seen ~= B.q then
-    if U.panel_open() then VA.seen = B.q; U.select(B.q.step); X.tab('build') else QA.tab = 'build' end
+    if U.panel_open() then VA.seen = B.q; U.select(B.q.step); X.tab('fix') else QA.tab = 'fix' end
   end
   if C.fix and C.fix.p.bd and VA.fixseen ~= C.fix.p then VA.fixseen = C.fix.p; X.tab('fix') end
 end
 VA.help = {
-  { 'BOUNDARY (A: details + Dive tab)' }, { 's', 'specify repo: prompt, prefilled' }, { '1-9', 'pick a listed repo (pane)' },
+  { 'BOUNDARY (A: Info + Run)' }, { 's', 'specify repo: prompt, prefilled' }, { '1-9', 'pick a listed repo (pane)' },
   { 'e', 'mark external' }, { 'S', 'don’t follow (declined)' }, { 'L', 'later (dive goes on)' }, { 'u', 'reopen' },
   { 'b', 'go to the waiting Boundary' },
 }
@@ -178,7 +185,7 @@ VA.help = {
 -- =====================================================================
 -- B: Boundaries inbox tab + picker float
 -- =====================================================================
-local VB = { key = 'B', name = 'Boundaries inbox tab (picker)', rows = {} }
+local VB = { key = 'B', name = 'Inbox in Run (picker)', rows = {} }
 local SECT = {
   { 'NEEDS YOU', { waiting = 1 } }, { 'IN PROGRESS', { reading = 1, extending = 1, pending = 1 } },
   { 'UNRESOLVED', { unresolved = 1 } }, { 'SETTLED', { external = 1, declined = 1, resolved = 1 } },
@@ -192,7 +199,7 @@ local function vb_counts()
   return n
 end
 local function vb_row_id()
-  if QA.tab ~= 'bounds' or not valid(U.W.det) then return nil end
+  if QA.tab ~= 'fix' or not valid(U.W.det) then return nil end
   return VB.rows[api.nvim_win_get_cursor(U.W.det)[1] - 1]
 end
 local function vb_id() return vb_row_id() or sel_bd() end
@@ -248,17 +255,14 @@ function VB.picker(id)
 end
 
 VB.extra = {
-  tabs = function() return { { key = 'bounds', pos = 2 } } end,
-  tabname = function(t)
-    if t ~= 'bounds' then return nil end
-    local n = vb_counts()
-    return 'Boundaries' .. (n.w > 0 and (' ⏸' .. n.w) or '') .. (n.u > 0 and (' ⚠' .. n.u) or '')
-  end,
-  has_prompt = function(t) return t == 'bounds' end,
+  tabname = run_name,
+  has_prompt = function() return false end,
   tall = function() return false end,
+  top = function(t) if t == 'fix' then return not (C.fix and not C.pending) end end,
   render = function(t, c, w)
-    if t ~= 'bounds' then return false end
+    if t ~= 'fix' then return false end
     VB.rows = {}
+    if C.pending then X.render_fix(c, w); c.add('') end
     B.render_dive(c, w, ' ', true)
     if B.dive.state == 'running' then
       local l = B.dive.log[#B.dive.log]
@@ -288,7 +292,7 @@ VB.extra = {
             local l = B.dive.log[#B.dive.log]
             VB.rows[c.add('     ⟳ ' .. (l and l.text or ''), 'DiagnosticInfo')] = id
           elseif s == 'extending' or s == 'pending' then
-            VB.rows[c.add('     ' .. B.LABEL[s][1] .. ' (Fix run / Review tab)', B.LABEL[s][2])] = id
+            VB.rows[c.add('     ' .. B.LABEL[s][1] .. ' (below)', B.LABEL[s][2])] = id
           end
         end
       end
@@ -300,18 +304,19 @@ VB.extra = {
       c.add(' ' .. string.rep('─', w - 2), 'DDDim')
       B.render_facts(c, cur, w, ' ')
     end
+    if C.fix and not C.pending then c.add(''); X.render_fix(c, w) end
     return true
   end,
   hint = function(t, insert)
-    if t ~= 'bounds' or insert then return nil end
+    if t ~= 'fix' or insert or C.fix or C.pending then return nil end
     local id = vb_id()
-    if not id then return '%#DDMode# BOUNDARIES %#Normal# ', chip('j k', 'walk') .. chip('q', 'graph') end
+    if not id then return '%#DDMode# BOUNDARIES %#Normal# ', chip('j k', 'walk') .. chip('⇥', 'graph') end
     local s = B.status(id)
-    return status_left(id, s), status_chips(id, s, #B.candidates(id), 'picker') .. chip('j k', 'walk') .. chip('q', 'graph')
+    return status_left(id, s), status_chips(id, s, #B.candidates(id), 'picker') .. chip('j k', 'walk') .. chip('⇥', 'graph')
   end,
 }
 local function vb_open(id)
-  X.tab('bounds')
+  X.tab('fix')
   if not U.panel_open() then return end
   api.nvim_set_current_win(U.W.det)
   id = id or G.waiting or every_bd()[1]
@@ -339,7 +344,7 @@ VB.dkeys = {
 for n = 1, 9 do VB.dkeys[tostring(n)] = function() pick_n(vb_id(), n) end end
 -- walking the list walks the map
 local function vb_preview()
-  if BV.cur() ~= VB or QA.tab ~= 'bounds' or not U.panel_open() or api.nvim_get_current_win() ~= U.W.det then return end
+  if BV.cur() ~= VB or QA.tab ~= 'fix' or not U.panel_open() or api.nvim_get_current_win() ~= U.W.det then return end
   local id = vb_row_id()
   if id and id ~= sel() then
     local cur = api.nvim_win_get_cursor(U.W.det)
@@ -357,12 +362,12 @@ end
 function VB.render()
   if B.q and VB.seen ~= B.q then
     if U.panel_open() then VB.seen = B.q; U.select(B.q.step) end
-    X.tab('bounds')
+    X.tab('fix')
   end
   if C.fix and C.fix.p.bd and VB.fixseen ~= C.fix.p then VB.fixseen = C.fix.p; X.tab('fix') end
 end
 VB.help = {
-  { 'BOUNDARY (B: inbox tab)' }, { 'b', 'open Boundaries tab' }, { 'j k', 'walk list (map follows)' }, { 's', 'specify repo: picker' },
+  { 'BOUNDARY (B: inbox in Run)' }, { 'b', 'Run tab, waiting row' }, { 'j k', 'walk list (map follows)' }, { 's', 'specify repo: picker' },
   { '1-9', 'pick a listed repo (tab)' }, { 'e', 'mark external' }, { 'S', 'don’t follow (declined)' }, { 'L', 'later' }, { 'u', 'reopen' },
 }
 
@@ -370,6 +375,18 @@ VB.help = {
 -- C: on the map: far-side ghosts + an answer card under the Boundary box
 -- =====================================================================
 local VC = { key = 'C', name = 'On the map (ghost + card)', ghosts = {} }
+VC.extra = {
+  tabname = run_name,
+  has_prompt = function() return false end,
+  tall = function() return false end,
+  hint = function() return nil end,
+  render = function(t, c, w)
+    if t ~= 'fix' or C.fix or C.pending then return false end
+    B.render_dive(c, w, ' ')
+    if B.q then c.add(''); c.add(' ⏸ the dive waits at “' .. title(B.q.step) .. '”: answer on the map (b)', 'DDRevChg') end
+    return true
+  end,
+}
 local DOTTED = { '┌', '┄', '┐', '┆', '┘', '┄', '└', '┆' }
 local function vc_close_ghosts()
   for _, w in ipairs(VC.ghosts) do if valid(w) then pcall(api.nvim_win_close, w, true) end end
@@ -507,6 +524,7 @@ local function vc_card_keys()
   VC.buf = buf
   local function back() if U.panel_open() then api.nvim_set_current_win(U.W.main) end end
   bmap(buf, 'q', back)
+  bmap(buf, '<Tab>', back)
   bmap(buf, '<Esc>', function() back(); vc_close_card() end)
   bmap(buf, '<CR>', function()
     local r = api.nvim_win_get_cursor(0)[1] - 1
@@ -542,7 +560,7 @@ end
 function VC.winbar()
   if not G.waiting or on_level(G.waiting) then return nil end
   return '%#DDMode# ' .. (U.S.mode == 'map' and 'MAP' or 'ZEN') .. ' %#DDCrumbs# %<' .. esc(U.crumbs(sel())) ..
-    ' %=%#DDRevChg# ⏸ dive waits in “' .. esc(where(G.waiting)) .. '” · b %#Normal# %#DDKey# ? %#DDCrumbs# help '
+    ' %=%#DDRevChg# ⏸ dive waits in “' .. esc(where(G.waiting)) .. '” · b %#Normal# %#DDKey# ⇥ %#DDCrumbs# tab  %#DDKey# ? %#DDCrumbs# help '
 end
 function VC.on_sync()
   vc_ghosts()
