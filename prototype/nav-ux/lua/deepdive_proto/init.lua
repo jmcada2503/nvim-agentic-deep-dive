@@ -12,6 +12,8 @@ local ns_hint = api.nvim_create_namespace('dd_hint') -- signs + eol hints, in th
 local CFG = { toggle = '<leader>dd', open_here = '<leader>dg', hints = '<leader>dh' }
 local S = { mode = 'map', sel = 'sf.submit', port = nil, hist = {}, auto = true, overlay = nil, cs = 0, hints = true }
 local W = {}
+M.hooks = {} -- PROTOTYPE qa-revisions: variant hooks (badge, node_hl, details, winbar, status, on_sync, on_open, help)
+M.vkeys = {}  -- variant key dispatch (falls back to base keys)
 local MODES = { map = {}, zen = {} }
 local OFF = 1          -- blank rows above the map canvas
 local MARGIN_R, MARGIN_C = 4, 6
@@ -73,6 +75,7 @@ local function badges(id)
   if u > 0 then b = b .. ' ⚠' .. u end
   if st.kind == 'boundary' and st.boundary.status == 'unresolved' then b = b .. ' ⚠' end
   if st.rev then b = b .. ' Δ' end
+  if M.hooks.badge then b = b .. (M.hooks.badge(id) or '') end
   return b
 end
 local function crumbs(id)
@@ -360,6 +363,10 @@ end
 
 local function details()
   local lines, hls
+  if M.hooks.details then
+    lines, hls = M.hooks.details()
+    if lines then put(W.dbuf, lines, hls) return end
+  end
   if S.overlay then lines, hls = S.overlay.lines, S.overlay.hls
   elseif S.mode == 'zen' then lines, hls = data_pane(S.sel)
   else lines, hls = describe(S.sel) end
@@ -375,10 +382,12 @@ local function bars()
   local esc = function(s) return (s:gsub('%%', '%%%%')) end
   vim.wo[W.main].winbar = '%#DDMode# ' .. (S.mode == 'map' and 'MAP' or 'ZEN') .. ' %#DDCrumbs# %<' .. esc(crumbs(S.sel)) ..
       ' %=%#DDKey# ? %#DDCrumbs# help '
+  local wb = M.hooks.winbar and M.hooks.winbar()
+  if wb then vim.wo[W.main].winbar = wb end
   local e = cur_edge()
   local foc = S.port and (' │ focus ' .. S.port.dir .. (e and (': ' .. edge_label(e)) or ': none')) or ''
   vim.wo[W.main].statusline = '%#StatusLine# ' .. icon(S.sel) .. ' ' .. esc(G.steps[S.sel].title) .. foc ..
-      '%= code ' .. (S.auto and 'follows' or 'manual') .. ' '
+      '%= ' .. (M.hooks.status and M.hooks.status() or '') .. ' code ' .. (S.auto and 'follows' or 'manual') .. ' '
 end
 
 -- keep box f (0-based rows/char cols) inside the view with a margin, cursor on (f.cr, f.cc)
@@ -424,6 +433,7 @@ local function sync(opts)
     S.jumped = S.sel
   end
   refresh_sel()
+  if M.hooks.on_sync then M.hooks.on_sync() end
 end
 
 local function select(id, no_hist)
@@ -669,10 +679,12 @@ MODES.map.render = function()
   local other = se and (S.port.dir == 'in' and se.from or se.to)
   for id, p in pairs(pos) do
     local selected = id == S.sel
+    local ov = M.hooks.node_hl and M.hooks.node_hl(id)
     for r = 0, NH - 1 do
+      local edge_row = r == 0 or r == NH - 1
       hls[#hls + 1] = { row = OFF + p.y + r, c0 = p.x, c1 = p.x + NW,
-        hl = selected and 'Visual' or (id == other and 'Search' or KIND_HL[style_of(id)]),
-        prio = selected and 200 or (id == other and 150 or 100) }
+        hl = (ov and (not selected or edge_row)) and ov or (selected and 'Visual' or (id == other and 'Search' or KIND_HL[style_of(id)])),
+        prio = (ov and edge_row) and 230 or (selected and 200 or (id == other and 150 or 100)) }
     end
     hls[#hls + 1] = { row = OFF + p.y + 3, c0 = p.x + 2, c1 = p.x + 7, hl = 'DDIn', prio = 210 }
     hls[#hls + 1] = { row = OFF + p.y + 4, c0 = p.x + 2, c1 = p.x + 7, hl = 'DDOut', prio = 210 }
@@ -871,7 +883,8 @@ local HELP = {
 }
 local function help()
   local lines, hls = {}, {}
-  for _, h in ipairs(HELP) do
+  local rows = vim.list_extend(vim.deepcopy(HELP), M.hooks.help and M.hooks.help() or {})
+  for _, h in ipairs(rows) do
     if not h[2] then
       if #lines > 0 then lines[#lines + 1] = '' end
       lines[#lines + 1] = ' ' .. h[1]
@@ -952,6 +965,14 @@ local function setkeys(buf)
   map('a', act_ask)
   map('r', act_repo)
   map('d', act_diff)
+  -- PROTOTYPE qa-revisions: keys the active variant may claim; unclaimed ones fall back to the base action
+  local BASE = { a = act_ask, ['<Esc>'] = function() if S.port or S.overlay then leave() end end }
+  for _, k in ipairs({ 'a', 'A', 'p', 'y', 'x', 'R', 'Q', 'H', 'W', 'X', 'D', 't', 'K', '!', 'n', 'N', '[r', ']r', '{', '}', 'F', '<Esc>' }) do
+    map(k, function()
+      local f = M.vkeys[k]
+      if f then f() elseif BASE[k] then BASE[k]() end
+    end)
+  end
   map('?', help)
   map('q', function() M.close() end)
 end
@@ -995,6 +1016,7 @@ function M.open(focus)
   vim.wo[W.det].winbar = '%#DDCrumbs# details'
   vim.wo[W.det].statusline = ' '
   S.jumped = S.sel -- opening never moves the user's editor
+  if M.hooks.on_open then M.hooks.on_open() end
   sync()
   if focus == false and W.editor and api.nvim_win_is_valid(W.editor) then api.nvim_set_current_win(W.editor) end
 end
@@ -1083,4 +1105,8 @@ function M.setup(opts)
 end
 
 M._S, M._W, M._sync, M._select = S, W, sync, select
+M._ = { S = S, W = W, G = G, sync = sync, select = select, put = put, details = details, bars = bars, crumbs = crumbs,
+  icon = icon, anchor_str = anchor_str, wrap = wrap, trunc = trunc, pad = pad, dw = dw, charbyte = charbyte,
+  ports = ports, cur_edge = cur_edge, edge_label = edge_label, shape_name = shape_name, show_in_editor = show_in_editor,
+  keyname = keyname, panel_open = panel_open, editor_win = editor_win, ns = ns, kind_label = kind_label }
 return M

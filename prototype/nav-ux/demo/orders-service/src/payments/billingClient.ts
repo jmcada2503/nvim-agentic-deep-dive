@@ -10,6 +10,7 @@ export interface ChargeResult {
   status: "approved" | "declined" | "error";
   chargeId?: string;
   declineReason?: string;
+  retryAfterMs?: number;
 }
 
 export const billing = {
@@ -21,6 +22,7 @@ export const billing = {
         body: JSON.stringify(req),
       });
       if (res.status >= 500) return { status: "error" };
+      if (res.status === 429) return { status: "error", retryAfterMs: Number(res.headers.get("retry-after") ?? "1") * 1000 };
       return (await res.json()) as ChargeResult;
     } catch {
       return { status: "error" };
