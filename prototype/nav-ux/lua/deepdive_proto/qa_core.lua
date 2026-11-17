@@ -591,6 +591,8 @@ function C.hl_setup()
   hl('DDRevIn', { fg = '#b8a165' })
   hl('DDPill', { fg = '#1e1e1e', bg = '#e5c07b', bold = true })
   hl('DDTab', { fg = '#abb2bf', bg = '#2c313c' })
+  hl('DDWhole', { fg = '#c678dd' })
+  hl('DDWholeBar', { fg = '#1e1e1e', bg = '#61afef', bold = true })
   hl('DDTabSel', { fg = '#1e1e1e', bg = '#c678dd', bold = true })
 end
 

@@ -137,7 +137,8 @@ local function site_of(cid) local s = G.steps[cid]; return s.callsite or s.ancho
 local function is_panel_win(w)
   if w == W.main or w == W.det then return true end
   local ok, b = pcall(api.nvim_win_get_buf, w)
-  return ok and (b == W.mbuf or b == W.dbuf)
+  -- PROTOTYPE qa-revisions: any deepdive:// buffer (prompt, chat, review, card) is ours, never the code editor
+  return ok and (b == W.mbuf or b == W.dbuf or vim.startswith(api.nvim_buf_get_name(b), 'deepdive://'))
 end
 local function panel_open() return W.main ~= nil and api.nvim_win_is_valid(W.main) end
 local function editor_win()
@@ -664,6 +665,7 @@ MODES.map.render = function()
   end
 
   local lines, hls = {}, {}
+  local whole = M.hooks.whole and M.hooks.whole() -- PROTOTYPE qa-revisions: whole-dive focus selects everything visible
   for _ = 1, OFF do lines[#lines + 1] = '' end
   for r = 1, total_h do
     local t = {}
@@ -672,13 +674,13 @@ MODES.map.render = function()
       t[c] = cell.ch or MASKCH[cell.m] or '│'
     end
     lines[#lines + 1] = table.concat(t):gsub('%s+$', '')
-    hls[#hls + 1] = { row = #lines - 1, hl = 'Comment', prio = 10 }
+    hls[#hls + 1] = { row = #lines - 1, hl = whole and 'DDWhole' or 'Comment', prio = 10 }
   end
   for _ = 1, MARGIN_R + 2 do lines[#lines + 1] = '' end
   local se = cur_edge()
   local other = se and (S.port.dir == 'in' and se.from or se.to)
   for id, p in pairs(pos) do
-    local selected = id == S.sel
+    local selected = whole or id == S.sel
     local ov = M.hooks.node_hl and M.hooks.node_hl(id)
     for r = 0, NH - 1 do
       local edge_row = r == 0 or r == NH - 1
@@ -688,7 +690,7 @@ MODES.map.render = function()
     end
     hls[#hls + 1] = { row = OFF + p.y + 3, c0 = p.x + 2, c1 = p.x + 7, hl = 'DDIn', prio = 210 }
     hls[#hls + 1] = { row = OFF + p.y + 4, c0 = p.x + 2, c1 = p.x + 7, hl = 'DDOut', prio = 210 }
-    if selected and S.port then
+    if id == S.sel and S.port then
       hls[#hls + 1] = { row = OFF + p.y + (S.port.dir == 'in' and 3 or 4), c0 = p.x + 1, c1 = p.x + NW - 1, hl = 'DDPort', prio = 220 }
     end
   end
