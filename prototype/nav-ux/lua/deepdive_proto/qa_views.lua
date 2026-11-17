@@ -192,7 +192,8 @@ local function a_winbar()
   for _, t in ipairs(TABS) do
     s = s .. (t == A.tab and '%#DDTabSel#' or '%#DDTab#') .. ' ' .. a_tabname(t) .. ' %#Normal# '
   end
-  vim.wo[U.W.det].winbar = s .. '%=%#Comment# t next tab '
+  vim.wo[U.W.det].winbar = s .. '%=' .. chip('t', 'next tab') .. chip('D', 'revisions')
+  vim.wo[U.W.det].statusline = A.tab == 'revs' and A.revs_bar() or ' '
   a_prompt_win()
   api.nvim_win_set_height(U.W.det, A.tab == 'details' and 14 or 21)
   a_hintbar()
@@ -231,27 +232,25 @@ function A.details()
       if #q > 0 then c.add(' queued: ' .. #q, 'Comment') end
     end
   elseif A.tab == 'revs' then
-    c.add(' overlay ' .. (C.ov_label() or 'off') .. '   filter ' .. (C.ov and C.ov.filter or 'all') .. '      legend', 'Title')
+    c.add(' graph colours', 'Comment')
     local r = #c.lines - 1
-    c.lines[r + 1] = c.lines[r + 1] .. '  + added  ~ changed  - removed  ▒ inside'
+    c.lines[r + 1] = c.lines[r + 1] .. '   + added  ~ changed  - removed  ▒ has changes inside'
     local l = c.lines[r + 1]
     local function tag(s, hl) local i = l:find(s, 1, true); if i then c.hl(r, hl, vim.fn.strchars(l:sub(1, i - 1)), vim.fn.strchars(l:sub(1, i - 1)) + vim.fn.strchars(s)) end end
-    tag('+ added', 'DDRevAdd'); tag('~ changed', 'DDRevChg'); tag('- removed', 'DDRevDel'); tag('▒ inside', 'DDRevIn')
+    tag('+ added', 'DDRevAdd'); tag('~ changed', 'DDRevChg'); tag('- removed', 'DDRevDel'); tag('▒ has changes inside', 'DDRevIn')
     c.add('')
     A.revrow = {}
     for _, rv in ipairs(C.revisions) do
       local on = C.ov and not C.ov.pending and rv.n >= C.ov.from and rv.n <= C.ov.to and (C.ov.filter == 'all' or C.ov.filter == rv.kind)
-      local mk = A.mark == rv.n and '⇥' or (on and '▌' or ' ')
-      local row = c.add(string.format(' %s r%-2d %-11s %s', mk, rv.n, rv.kind, U.trunc(rv.reason, w - 20)), on and 'Normal' or 'Comment')
+      local row = c.add(string.format(' ▌ r%-2d %-11s %s', rv.n, rv.kind, U.trunc(rv.reason, w - 20)), on and 'Normal' or 'Comment')
       c.hl(row, rv.kind == 'correction' and 'DiagnosticWarn' or 'DiagnosticInfo', 7, 18)
-      if on then c.hl(row, 'DDCardTitle', 1, 2) end
+      c.hl(row, on and 'DDCardTitle' or 'DDDim', 1, 2)
       A.revrow[row] = rv.n
-      local r2 = c.add('              asked “' .. rv.q .. '”  · ' .. #rv.ops .. ' op' .. (#rv.ops > 1 and 's' or ''), 'Comment')
+      local r2 = c.add(' ▌            asked “' .. rv.q .. '”  · ' .. #rv.ops .. ' op' .. (#rv.ops > 1 and 's' or ''), 'Comment')
+      c.hl(r2, on and 'DDCardTitle' or 'DDDim', 1, 2)
       A.revrow[r2] = rv.n
     end
     if C.pending then c.add(string.format('   r%-2d %-11s %s', C.pending.n, C.pending.kind, 'pending: see the Review tab'), 'DiagnosticHint') end
-    c.add('')
-    c.add(' ⏎ show on graph   ⇥ mark range start, ⏎ on another row = range   F filter   Esc overlay off   q back to map', 'DDKeyHint')
   end
   return c.lines, c.hls
 end
@@ -268,6 +267,45 @@ local function a_redraw()
   end
 end
 local function a_tab(t) A.tab = t; a_redraw() end
+
+-- Revisions list: the cursor (or a V selection) is what the graph shows
+function A.revs_bar()
+  local shown = C.ov and not C.ov.pending and C.ov_label()
+  return '%#DDMode# REVISIONS %#Normal# graph shows ' .. (shown and ('%#DDCardTitle#' .. shown .. '%#Normal#') or 'nothing') ..
+    '%=' .. chip('j k', 'preview') .. chip('V', 'range') .. chip('f', 'filter: ' .. ((C.ov and C.ov.filter) or 'all')) ..
+    chip('⏎', 'keep on graph') .. chip('q', 'close')
+end
+local function a_revs_preview()
+  if V.cur() ~= A or A.tab ~= 'revs' or not U.panel_open() or api.nvim_get_current_win() ~= U.W.det then return end
+  local a, b = vim.fn.line('.'), vim.fn.line('.')
+  local m = vim.fn.mode()
+  if m == 'V' or m == 'v' or m == '\22' then a = vim.fn.line('v') end
+  local lo, hi
+  for l = math.min(a, b), math.max(a, b) do
+    local n = A.revrow[l - 1]
+    if n then lo, hi = math.min(lo or n, n), math.max(hi or n, n) end
+  end
+  if not lo then return end
+  if C.ov and not C.ov.pending and C.ov.from == lo and C.ov.to == hi then return end
+  ov_set(lo, hi)
+  gsync()
+end
+local function a_revs_enter()
+  if #C.revisions == 0 or not U.panel_open() then return a_tab('revs') end
+  A.tab = 'revs'
+  a_redraw()
+  api.nvim_set_current_win(U.W.det)
+  local last
+  for row, n in pairs(A.revrow) do if n == #C.revisions and (not last or row < last) then last = row end end
+  api.nvim_win_set_cursor(U.W.det, { (last or 0) + 1, 0 })
+  a_revs_preview()
+end
+local function a_revs_leave(keep)
+  if vim.fn.mode():match('^[vV\22]') then vim.cmd('normal! \27') end
+  if not keep then C.ov = nil end
+  if U.panel_open() then api.nvim_set_current_win(U.W.main) end
+  gsync()
+end
 local function a_dive(on) if A.dive ~= on then A.dive = on; gsync() end end
 
 -- the prompt: open the thread tab and put the cursor in the chat input
@@ -352,18 +390,13 @@ local function a_det_keys()
   A.dkeys = true
   local function row() return api.nvim_win_get_cursor(0)[1] - 1 end
   local K = {
-    ['<CR>'] = function()
-      if A.tab == 'revs' then
-        local n = A.revrow[row()]
-        if not n then return end
-        if A.mark then ov_set(A.mark, n); A.mark = nil else ov_set(n, n) end
-        gsync()
-      else cite_at(A.cv, 0) end
+    ['<CR>'] = function() if A.tab == 'revs' then a_revs_leave(true) else cite_at(A.cv, 0) end end,
+    f = function() if A.tab == 'revs' then ov_filter(); gsync() end end,
+    ['<Esc>'] = function() if A.tab == 'revs' then a_revs_leave(false) end end,
+    q = function()
+      if A.tab == 'revs' then a_revs_leave(false)
+      elseif U.panel_open() then api.nvim_set_current_win(U.W.main) end
     end,
-    ['<Tab>'] = function() if A.tab == 'revs' then A.mark = A.revrow[row()]; a_redraw() end end,
-    F = function() ov_filter(); gsync() end,
-    ['<Esc>'] = function() if A.tab == 'revs' and C.ov and not C.ov.pending then C.ov = nil; A.mark = nil; gsync() end end,
-    q = function() if U.panel_open() then api.nvim_set_current_win(U.W.main) end end,
     g = function() cite_at(A.cv, 0) end,
     t = function() A.keys.t() end,
     i = function() if a_has_prompt() then a_prompt() end end,
@@ -371,19 +404,27 @@ local function a_det_keys()
   }
   A.dk = vim.tbl_keys(K)
   for k, fn in pairs(K) do bmap(b, k, function() if V.cur() == A then fn() end end) end
+  -- the same keys while a V range is selected
+  for k, fn in pairs({ ['<CR>'] = K['<CR>'], f = K.f, q = K.q }) do bmap(b, k, function() if V.cur() == A then fn() end end, 'x') end
+  A.dkx = { '<CR>', 'f', 'q' }
+  api.nvim_create_autocmd({ 'CursorMoved', 'ModeChanged' }, { buffer = b, callback = function() vim.schedule(a_revs_preview) end })
 end
 A.keys = {
   a = function() a_dive(false); a_prompt('thread') end,
   A = function() a_dive(true); a_prompt('thread') end,
   p = a_problem, y = ACTA.y, x = ACTA.x, R = ACTA.R, Q = ACTA.Q, H = ACTA.H, W = ACTA.W, X = ACTA.X,
-  D = function() a_tab('revs'); if U.panel_open() then api.nvim_set_current_win(U.W.det) end end,
+  D = a_revs_enter,
   t = function()
     local i = 1
     for k, t in ipairs(TABS) do if t == A.tab then i = k end end
-    a_tab(TABS[i % #TABS + 1])
+    local nxt = TABS[i % #TABS + 1]
+    if nxt == 'revs' then return a_revs_enter() end
+    if A.tab == 'revs' then a_revs_leave(false) end
+    a_tab(nxt)
   end,
   ['<Esc>'] = function()
     if A.dive then a_dive(false); a_redraw()
+    elseif C.ov and not C.ov.pending then C.ov = nil; gsync()
     else U.S.port = nil; U.S.overlay = nil; U.sync { nojump = true } end
   end,
 }
@@ -418,6 +459,8 @@ function A.deactivate()
   end
   if A.dkeys and U.W.dbuf then
     for _, k in ipairs(A.dk) do pcall(vim.keymap.del, 'n', k, { buffer = U.W.dbuf }) end
+    for _, k in ipairs(A.dkx) do pcall(vim.keymap.del, 'x', k, { buffer = U.W.dbuf }) end
+    vim.wo[U.W.det].statusline = ' '
     vim.keymap.set('n', 'q', function() P.close() end, { buffer = U.W.dbuf, nowait = true })
   end
   A.dkeys = false
@@ -425,7 +468,9 @@ end
 A.help = {
   { 'Q&A (A: tabs)' }, { 't', 'next details tab' }, { 'a', 'thread of selection + prompt' }, { 'A', 'whole-dive thread + prompt' },
   { 'p', 'report a problem' }, { 'y', 'accept proposal / revision' }, { 'x', 'dismiss / reject' },
-  { 'R', 'reply / reject with note' }, { 'D', 'Revisions tab' }, { 'Q H W X', 'stuck: ask, hint, widen, abandon' },
+  { 'R', 'reply / reject with note' }, { 'Q H W X', 'stuck: ask, hint, widen, abandon' },
+  { 'REVISIONS (A)' }, { 'D', 'open list (or t to the tab)' }, { 'j k', 'preview on graph' }, { 'V', 'select a range' },
+  { 'f', 'filter by kind' }, { '⏎', 'keep on graph, back' }, { 'q Esc', 'close, colours off' },
 }
 
 -- =====================================================================
@@ -860,7 +905,8 @@ local function pill()
   api.nvim_buf_clear_namespace(V.pbuf, U.ns, 0, -1)
   api.nvim_buf_set_extmark(V.pbuf, U.ns, 0, 0, { end_col = #text, hl_group = 'DDPill' })
   local w = vim.fn.strdisplaywidth(text)
-  local cfg = { relative = 'editor', row = vim.o.lines - 2, col = math.floor((vim.o.columns - w) / 2), width = w, height = 1,
+  -- top-right of the code side, clear of the panel's bars
+  local cfg = { relative = 'editor', row = 0, col = math.max(0, math.floor(vim.o.columns * 0.5) - w - 2), width = w, height = 1,
     style = 'minimal', focusable = false, zindex = 200, border = 'none' }
   if valid(V.pw) then api.nvim_win_set_config(V.pw, cfg) else
     cfg.noautocmd = true

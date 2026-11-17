@@ -39,9 +39,12 @@ local function charbyte(line, ci)
   return vim.fn.byteidx(line, ci)
 end
 local function put(buf, lines, hls)
-  vim.bo[buf].modifiable = true
-  api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].modifiable = false
+  -- unchanged text: only redo highlights (keeps cursor and Visual selection, e.g. while browsing a list)
+  if not vim.deep_equal(api.nvim_buf_get_lines(buf, 0, -1, false), lines) then
+    vim.bo[buf].modifiable = true
+    api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.bo[buf].modifiable = false
+  end
   api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   for _, h in ipairs(hls or {}) do
     local line = lines[h.row + 1] or ''
