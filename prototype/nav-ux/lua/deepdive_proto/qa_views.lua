@@ -80,13 +80,7 @@ end
 local function ov_set(from, to)
   local n = #C.revisions
   from, to = math.max(1, math.min(from, n)), math.max(1, math.min(to, n))
-  C.ov = { from = math.min(from, to), to = math.max(from, to), filter = (C.ov and C.ov.filter) or 'all' }
-end
-local function ov_filter()
-  if not C.ov or C.ov.pending then return end
-  local i = 1
-  for k, f in ipairs(C.FILTERS) do if f == C.ov.filter then i = k end end
-  C.ov.filter = C.FILTERS[i % #C.FILTERS + 1]
+  C.ov = { from = math.min(from, to), to = math.max(from, to) }
 end
 
 local function badge(id)
@@ -241,7 +235,7 @@ function A.details()
     c.add('')
     A.revrow = {}
     for _, rv in ipairs(C.revisions) do
-      local on = C.ov and not C.ov.pending and rv.n >= C.ov.from and rv.n <= C.ov.to and (C.ov.filter == 'all' or C.ov.filter == rv.kind)
+      local on = C.ov and not C.ov.pending and rv.n >= C.ov.from and rv.n <= C.ov.to
       local row = c.add(string.format(' ▌ r%-2d %-11s %s', rv.n, rv.kind, U.trunc(rv.reason, w - 20)), on and 'Normal' or 'Comment')
       c.hl(row, rv.kind == 'correction' and 'DiagnosticWarn' or 'DiagnosticInfo', 7, 18)
       c.hl(row, on and 'DDCardTitle' or 'DDDim', 1, 2)
@@ -272,7 +266,7 @@ local function a_tab(t) A.tab = t; a_redraw() end
 function A.revs_bar()
   local shown = C.ov and not C.ov.pending and C.ov_label()
   return '%#DDMode# REVISIONS %#Normal# graph shows ' .. (shown and ('%#DDCardTitle#' .. shown .. '%#Normal#') or 'nothing') ..
-    '%=' .. chip('j k', 'preview') .. chip('V', 'range') .. chip('f', 'filter: ' .. ((C.ov and C.ov.filter) or 'all')) ..
+    '%=' .. chip('j k', 'preview') .. chip('V', 'range') ..
     chip('⏎', 'keep on graph') .. chip('q', 'close')
 end
 local function a_revs_preview()
@@ -391,7 +385,6 @@ local function a_det_keys()
   local function row() return api.nvim_win_get_cursor(0)[1] - 1 end
   local K = {
     ['<CR>'] = function() if A.tab == 'revs' then a_revs_leave(true) else cite_at(A.cv, 0) end end,
-    f = function() if A.tab == 'revs' then ov_filter(); gsync() end end,
     ['<Esc>'] = function() if A.tab == 'revs' then a_revs_leave(false) end end,
     q = function()
       if A.tab == 'revs' then a_revs_leave(false)
@@ -405,8 +398,8 @@ local function a_det_keys()
   A.dk = vim.tbl_keys(K)
   for k, fn in pairs(K) do bmap(b, k, function() if V.cur() == A then fn() end end) end
   -- the same keys while a V range is selected
-  for k, fn in pairs({ ['<CR>'] = K['<CR>'], f = K.f, q = K.q }) do bmap(b, k, function() if V.cur() == A then fn() end end, 'x') end
-  A.dkx = { '<CR>', 'f', 'q' }
+  for k, fn in pairs({ ['<CR>'] = K['<CR>'], q = K.q }) do bmap(b, k, function() if V.cur() == A then fn() end end, 'x') end
+  A.dkx = { '<CR>', 'q' }
   api.nvim_create_autocmd({ 'CursorMoved', 'ModeChanged' }, { buffer = b, callback = function() vim.schedule(a_revs_preview) end })
 end
 A.keys = {
@@ -470,7 +463,7 @@ A.help = {
   { 'p', 'report a problem' }, { 'y', 'accept proposal / revision' }, { 'x', 'dismiss / reject' },
   { 'R', 'reply / reject with note' }, { 'Q H W X', 'stuck: ask, hint, widen, abandon' },
   { 'REVISIONS (A)' }, { 'D', 'open list (or t to the tab)' }, { 'j k', 'preview on graph' }, { 'V', 'select a range' },
-  { 'f', 'filter by kind' }, { '⏎', 'keep on graph, back' }, { 'q Esc', 'close, colours off' },
+  { '⏎', 'keep on graph, back' }, { 'q Esc', 'close, colours off' },
 }
 
 -- =====================================================================
@@ -599,7 +592,7 @@ function B.picker()
     local c = C.canvas()
     local cur = api.nvim_win_get_cursor(win)[1]
     for _, rv in ipairs(C.revisions) do
-      local on = C.ov and not C.ov.pending and rv.n >= C.ov.from and rv.n <= C.ov.to and (C.ov.filter == 'all' or C.ov.filter == rv.kind)
+      local on = C.ov and not C.ov.pending and rv.n >= C.ov.from and rv.n <= C.ov.to
       local r = c.add(string.format(' %s r%-2d %-11s asked “%s”', mark == rv.n and '⇥' or (on and '●' or ' '), rv.n, rv.kind, rv.q))
       c.hl(r, rv.kind == 'correction' and 'DiagnosticWarn' or 'DiagnosticInfo', 7, 18)
     end
@@ -607,7 +600,7 @@ function B.picker()
     cur = math.min(cur, n)
     local rv = C.revisions[cur]
     c.add(string.rep('─', width), 'Comment')
-    c.add(' overlay ' .. (C.ov_label() or 'off') .. '   filter ' .. (C.ov and C.ov.filter or 'all'), 'Title')
+    c.add(' overlay ' .. (C.ov_label() or 'off'), 'Title')
     if rv then
       for _, l in ipairs(C.wrap('reason  ' .. rv.reason, width - 4)) do c.add(' ' .. l) end
       for _, op in ipairs(rv.ops) do
@@ -616,7 +609,7 @@ function B.picker()
       end
     end
     c.add('')
-    c.add(' ⏎ show on graph · ⇥ mark range start · F filter · q close (keeps overlay) · Esc close + overlay off', 'DDKeyHint')
+    c.add(' ⏎ show on graph · ⇥ mark range start · q close (keeps overlay) · Esc close + overlay off', 'DDKeyHint')
     U.put(buf, c.lines, c.hls)
     api.nvim_win_set_cursor(win, { cur, 0 })
   end
@@ -628,7 +621,6 @@ function B.picker()
     gsync(); render()
   end)
   bmap(buf, '<Tab>', function() mark = api.nvim_win_get_cursor(0)[1]; render() end)
-  bmap(buf, 'F', function() ov_filter(); gsync(); render() end)
   bmap(buf, 'q', close)
   bmap(buf, '<Esc>', function() C.ov = nil; gsync(); close() end)
   local grp = api.nvim_create_augroup('dd_picker', { clear = true })
@@ -755,10 +747,10 @@ function Cv.winbar()
   elseif m == 'timeline' then
     local s = '%#DDMode# REVS %#Normal#%< '
     for i, rv in ipairs(C.revisions) do
-      local on = C.ov and rv.n >= C.ov.from and rv.n <= C.ov.to and (C.ov.filter == 'all' or C.ov.filter == rv.kind)
+      local on = C.ov and rv.n >= C.ov.from and rv.n <= C.ov.to
       s = s .. (i > 1 and '%#Comment#━' or '') .. (on and '%#DDTabSel#' or '%#DDTab#') .. ' r' .. rv.n .. ' ' .. rv.kind:sub(1, 4) .. ' '
     end
-    return s .. '%#Normal#  filter ' .. C.ov.filter .. '%=%#Comment# [r ]r move · { } range · F filter · n next change · Esc exit '
+    return s .. '%=%#Comment# [r ]r move · { } range · n next change · Esc exit '
   end
 end
 function Cv.status()
@@ -849,7 +841,6 @@ Cv.keys = {
   [']r'] = function() c_tl_move(1) end,
   ['{'] = function() if Cv.tl then ov_set(C.ov.from - 1, C.ov.to); gsync() end end,
   ['}'] = function() if Cv.tl then ov_set(C.ov.from, C.ov.to + 1); gsync() end end,
-  F = function() if Cv.tl then ov_filter(); gsync() end end,
   ['<Esc>'] = function()
     if Cv.card then c_close_card()
     elseif Cv.tl then Cv.tl = false; C.ov = nil; gsync()

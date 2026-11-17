@@ -972,7 +972,7 @@ local function setkeys(buf)
   map('d', act_diff)
   -- PROTOTYPE qa-revisions: keys the active variant may claim; unclaimed ones fall back to the base action
   local BASE = { a = act_ask, ['<Esc>'] = function() if S.port or S.overlay then leave() end end }
-  for _, k in ipairs({ 'a', 'A', 'p', 'y', 'x', 'R', 'Q', 'H', 'W', 'X', 'D', 't', 'K', '!', 'n', 'N', '[r', ']r', '{', '}', 'F', '<Esc>' }) do
+  for _, k in ipairs({ 'a', 'A', 'p', 'y', 'x', 'R', 'Q', 'H', 'W', 'X', 'D', 't', 'K', '!', 'n', 'N', '[r', ']r', '{', '}', '<Esc>' }) do
     map(k, function()
       local f = M.vkeys[k]
       if f then f() elseif BASE[k] then BASE[k]() end

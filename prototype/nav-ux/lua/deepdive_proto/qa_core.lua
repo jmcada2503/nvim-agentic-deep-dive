@@ -10,7 +10,7 @@ C.proposals = {}
 C.revisions = {}
 C.fix = nil        -- current Fix run
 C.pending = nil    -- current Pending revision
-C.ov = nil         -- graph diff overlay: { from=, to=, filter='all'|'correction'|'extension' } or { pending=true }
+C.ov = nil         -- graph diff overlay: { from=, to= } or { pending=true }
 C.sim_fail = true  -- the first Fix run attempt gets stuck in the validation loop (demo toggle)
 
 local listeners = {}
@@ -382,13 +382,12 @@ function C.reject_pending(feedback)
 end
 
 -- ---------- graph diff overlay ----------
-C.FILTERS = { 'all', 'correction', 'extension' }
 function C.ov_revs()
   if not C.ov then return {} end
   if C.ov.pending then return C.pending and { C.pending } or {} end
   local out = {}
   for _, r in ipairs(C.revisions) do
-    if r.n >= C.ov.from and r.n <= C.ov.to and (C.ov.filter == 'all' or C.ov.filter == r.kind) then out[#out + 1] = r end
+    if r.n >= C.ov.from and r.n <= C.ov.to then out[#out + 1] = r end
   end
   return out
 end
@@ -418,7 +417,7 @@ end
 function C.ov_label()
   if not C.ov then return nil end
   if C.ov.pending then return C.pending and ('pending r' .. C.pending.n) or nil end
-  return (C.ov.from == C.ov.to and ('r' .. C.ov.from) or ('r' .. C.ov.from .. '–r' .. C.ov.to)) .. (C.ov.filter ~= 'all' and (' · ' .. C.ov.filter) or '')
+  return (C.ov.from == C.ov.to and ('r' .. C.ov.from) or ('r' .. C.ov.from .. '–r' .. C.ov.to))
 end
 
 -- ---------- shared text rendering (content, not layout) ----------
