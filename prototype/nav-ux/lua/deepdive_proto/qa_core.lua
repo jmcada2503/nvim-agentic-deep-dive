@@ -301,8 +301,10 @@ function C.start_fix(p, note, attempt)
   end
   C.fix = f
   emit('graph')
+  if p.run then return p.run(f) end -- PROTOTYPE boundary: extension runs bring their own script
   run(f)
 end
+C.fixlog, C.chain = fixlog, chain
 
 function C.accept(p)
   if C.fix or C.pending then p.status = 'queued'; emit('graph'); return end
@@ -350,8 +352,11 @@ end
 function C.accept_pending()
   local pr = C.pending
   local touched = {}
+  if pr.apply then pr.apply() end -- PROTOTYPE boundary: extension ops mutate the graph themselves
   for _, op in ipairs(pr.ops) do
-    if op.what == 'step' then
+    if pr.apply then
+      if op.what == 'step' then touched[op.id] = true end
+    elseif op.what == 'step' then
       touched[op.id] = true
       if op.field == 'summary' then G.steps[op.id].summary = op.after end
       G.steps[op.id].rev = { n = pr.n, kind = pr.kind, reason = pr.reason, before = op.field .. ': ' .. op.before, after = op.field .. ': ' .. op.after }
@@ -404,7 +409,9 @@ function C.node_hl(id)
   local t = C.targets()
   if t[id] then return HL[t[id].op] end
   for tid in pairs(t) do
-    for _, a in ipairs(G.ancestors(tid)) do if a == id then return 'DDRevIn' end end
+    if G.steps[tid] then -- PROTOTYPE boundary: added steps do not exist until accepted
+      for _, a in ipairs(G.ancestors(tid)) do if a == id then return 'DDRevIn' end end
+    end
   end
 end
 function C.ops_at(id)
@@ -558,9 +565,9 @@ function C.render_review(c, w, ind, keys, only_id)
   c.add('')
   for _, op in ipairs(pr.ops) do
     if not only_id or op.id == only_id then
-      local name = op.what == 'step' and ('“' .. G.steps[op.id].title .. '”') or op.id
+      local name = op.what == 'step' and ('“' .. (op.title or G.steps[op.id].title) .. '”') or op.id
       local sym = op.op == 'add' and '+' or (op.op == 'remove' and '-' or '~')
-      local rr = c.add(ind .. sym .. ' ' .. op.op .. ' ' .. op.what .. ' ' .. name .. '  · ' .. op.field, op.op == 'add' and 'DDRevAdd' or 'DDRevChg')
+      local rr = c.add(ind .. sym .. ' ' .. op.op .. ' ' .. op.what .. ' ' .. name .. (op.field and ('  · ' .. op.field) or ''), op.op == 'add' and 'DDRevAdd' or 'DDRevChg')
       c.hl(rr, op.op == 'add' and 'DDRevAdd' or 'DDRevChg', 0, vim.fn.strchars(ind) + 1)
       for _, l in ipairs(wrap(op.before, w - 8 - vim.fn.strchars(ind))) do c.add(ind .. '   − ' .. l, 'DiffDelete') end
       for _, l in ipairs(wrap(op.after, w - 8 - vim.fn.strchars(ind))) do c.add(ind .. '   + ' .. l, 'DiffAdd') end

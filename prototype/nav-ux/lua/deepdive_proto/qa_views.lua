@@ -107,9 +107,16 @@ end
 -- A: tabs in the details pane, with a chat prompt under the Thread / Fix run tabs
 -- =====================================================================
 local A = { key = 'A', name = 'Tabs in the details pane', tab = 'details', dive = false, revrow = {}, mark = nil, dkeys = false }
-local TABS = { 'details', 'thread', 'fix', 'revs' }
+-- PROTOTYPE boundary: A.extra (set by bd_views) may add tabs, tab names, content, prompt and hint-bar chips
+local function TABS_()
+  local t = { 'details', 'thread', 'fix', 'revs' }
+  if A.extra then for _, x in ipairs(A.extra.tabs()) do table.insert(t, x.pos or #t + 1, x.key) end end
+  return t
+end
 local function a_focus() return A.dive and C.DIVE or focus() end
 local function a_tabname(t)
+  local xn = A.extra and A.extra.tabname(t)
+  if xn then return xn end
   if t == 'thread' then
     local f = a_focus()
     local th = C.threads[f.key]
@@ -123,7 +130,7 @@ local function a_tabname(t)
   end
   return 'Details'
 end
-local function a_has_prompt() return A.tab == 'thread' or A.tab == 'fix' end
+local function a_has_prompt() return A.tab == 'thread' or A.tab == 'fix' or (A.extra and A.extra.has_prompt(A.tab)) or false end
 local function a_in_prompt() return valid(A.iw) and api.nvim_get_current_win() == A.iw end
 
 -- the hint bar over the prompt: what you can do right now (C-style key chips, by state)
@@ -135,9 +142,13 @@ local function a_hintbar()
   local who = f.kind == 'dive' and '◎ whole dive' or ((f.kind == 'edge' and '⇄ ' or (U.icon(f.id) .. ' ')) .. U.trunc(f.label, 34))
   local left, right = '', ''
   local insert = a_in_prompt() and vim.fn.mode() == 'i'
+  local xl, xr = nil, nil
+  if A.extra and not A.imode then xl, xr = A.extra.hint(A.tab, insert) end
   if A.imode then
     left = '%#DDRevChg# ' .. A.imode.label .. ' %#Normal# '
-    right = chip('⏎', 'send') .. chip('Esc', 'cancel')
+    right = (A.imode.chips or '') .. chip('⏎', 'send') .. chip('Esc', 'cancel')
+  elseif xl then
+    left, right = xl, xr
   else
     if A.tab == 'fix' and failed() then
       left = '%#DiagnosticError# ✗ ' .. C.fix.p.id .. ' stuck %#Normal# ' .. (insert and 'typing asks the Fix run  ' or '')
@@ -183,20 +194,26 @@ end
 local function a_winbar()
   if not valid(U.W.det) then return end
   local s = ''
-  for _, t in ipairs(TABS) do
+  local tabs = TABS_()
+  local has = false
+  for _, t in ipairs(tabs) do has = has or t == A.tab end
+  if not has then A.tab = 'details' end
+  for _, t in ipairs(tabs) do
     s = s .. (t == A.tab and '%#DDTabSel#' or '%#DDTab#') .. ' ' .. a_tabname(t) .. ' %#Normal# '
   end
   vim.wo[U.W.det].winbar = s .. '%=' .. chip('t', 'next tab') .. chip('D', 'revisions')
   vim.wo[U.W.det].statusline = A.tab == 'revs' and A.revs_bar() or ' '
   a_prompt_win()
-  api.nvim_win_set_height(U.W.det, A.tab == 'details' and 14 or 21)
+  api.nvim_win_set_height(U.W.det, (A.tab == 'details' and not (A.extra and A.extra.tall(A.tab))) and 14 or 21)
   a_hintbar()
 end
 function A.details()
-  if A.tab == 'details' or not valid(U.W.det) then return nil end
+  if not valid(U.W.det) then return nil end
   local w = api.nvim_win_get_width(U.W.det) - 2
   local c = C.canvas()
   A.cv = c
+  if A.extra and A.extra.render(A.tab, c, w) then return c.lines, c.hls end
+  if A.tab == 'details' then return nil end
   if A.tab == 'thread' then
     local f = a_focus()
     c.add(' about  ' .. (f.kind == 'dive' and '◎ ' or '') .. f.label, 'Title')
@@ -446,6 +463,7 @@ A.keys = {
   D = a_revs_enter,
   t = function()
     local i = 1
+    local TABS = TABS_()
     for k, t in ipairs(TABS) do if t == A.tab then i = k end end
     local nxt = TABS[i % #TABS + 1]
     if nxt == 'revs' then return a_revs_enter() end
@@ -922,8 +940,15 @@ Cv.help = {
 -- =====================================================================
 -- switcher + wiring
 -- =====================================================================
-local VARS = { A, B, Cv }
+-- PROTOTYPE boundary: the Q&A ticket picked A; B and C stay in the file but are no longer switchable.
+-- [v ]v and the pill now belong to bd_views (Boundary variants).
+local VARS = { A }
 function V.cur() return VARS[V.i] end
+V.A = A
+V.api = { prompt = function(...) return a_prompt(...) end, redraw = function() return a_redraw() end,
+  tab = function(t) return a_tab(t) end, chip = chip, esc = esc, hintbar = function() return a_hintbar() end,
+  gsync = gsync, focus = focus, cite_at = cite_at, bmap = bmap, scratch = scratch, winopts = winopts, valid = valid,
+  back_to_graph = function() return back_to_graph() end }
 
 local function pill()
   local v = V.cur()
@@ -960,24 +985,16 @@ function V.setup()
   P.hooks.whole = function() local v = V.cur(); return v.whole and v.whole() end
   P.hooks.on_sync = function() local v = V.cur(); if v.on_sync then v.on_sync() end end
   P.hooks.on_open = function()
-    for _, b in ipairs({ U.W.mbuf, U.W.dbuf }) do
-      bmap(b, '[v', function() V.switch(-1) end)
-      bmap(b, ']v', function() V.switch(1) end)
-    end
     local v = V.cur(); if v.on_open then v.on_open() end
   end
   P.hooks.help = function()
-    return vim.list_extend({ { 'PROTOTYPE' }, { '[v ]v', 'switch layout variant' }, { '<leader>dF', 'fail-sim on/off' } }, V.cur().help or {})
+    return vim.list_extend({ { '<leader>dF', 'Q&A fail-sim on/off' } }, V.cur().help or {})
   end
   P.vkeys = setmetatable({}, { __index = function(_, k) return V.cur().keys[k] end })
   C.on(function(what) V.cur().render(what) end)
-  vim.keymap.set('n', '<leader>dv', function() V.switch(1) end, { desc = 'Deep dive proto: next variant' })
-  vim.keymap.set('n', '<leader>dV', function() V.switch(-1) end, { desc = 'Deep dive proto: previous variant' })
-  vim.keymap.set('n', '<leader>dF', function() C.sim_fail = not C.sim_fail; pill() end, { desc = 'Deep dive proto: toggle fail-sim' })
-  api.nvim_create_autocmd('VimResized', { callback = pill })
-  local start = (vim.env.DD_VARIANT or 'A'):upper()
-  for k, v in ipairs(VARS) do if v.key == start then V.i = k end end
-  vim.schedule(function() V.cur().activate(); pill() end)
+  vim.keymap.set('n', '<leader>dF', function() C.sim_fail = not C.sim_fail end, { desc = 'Deep dive proto: toggle fail-sim' })
+  V.i = 1
+  vim.schedule(function() V.cur().activate() end)
 end
 
 return V

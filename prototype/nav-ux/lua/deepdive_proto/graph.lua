@@ -224,7 +224,7 @@ local function resolve(a, id)
   assert(a.s and a.e, 'anchor not found for ' .. id)
   a.file = file
 end
-for _, s in ipairs(list) do
+local function register(s)
   resolve(s.anchor, s.id)
   M.files[s.anchor.file] = M.files[s.anchor.file] or {}
   table.insert(M.files[s.anchor.file], { id = s.id, a = s.anchor, kind = 'anchor' })
@@ -234,8 +234,22 @@ for _, s in ipairs(list) do
     table.insert(M.files[s.callsite.file], { id = s.id, a = s.callsite, kind = 'call' })
   end
 end
+for _, s in ipairs(list) do register(s) end
 
 for name, a in pairs(M.shape_defs) do resolve(a, 'shape ' .. name) end
+
+-- PROTOTYPE boundary: resolving a Boundary with a repo adds that repo's Steps (A(...) anchors, resolved here)
+M.A = A
+M.resolve = resolve
+function M.add(s)
+  list[#list + 1] = s
+  M.steps[s.id] = s
+  register(s)
+end
+function M.add_shape(name, fields, def)
+  M.shapes[name] = fields
+  if def then resolve(def, 'shape ' .. name); M.shape_defs[name] = def end
+end
 
 function M.children(pid)
   local out = {}
@@ -251,7 +265,7 @@ function M.unresolved(id)
   local n = 0
   for _, c in ipairs(M.children(id)) do
     local s = M.steps[c]
-    if s.kind == 'boundary' and s.boundary.status == 'unresolved' then n = n + 1 end
+    if s.kind == 'boundary' and s.boundary.status == 'unresolved' and M.waiting ~= c then n = n + 1 end
     n = n + M.unresolved(c)
   end
   return n

@@ -76,7 +76,7 @@ local function badges(id)
   local st, b = G.steps[id], ''
   local u = G.unresolved(id)
   if u > 0 then b = b .. ' ⚠' .. u end
-  if st.kind == 'boundary' and st.boundary.status == 'unresolved' then b = b .. ' ⚠' end
+  if st.kind == 'boundary' and st.boundary.status == 'unresolved' and G.waiting ~= id then b = b .. ' ⚠' end
   if st.rev then b = b .. ' Δ' end
   if M.hooks.badge then b = b .. (M.hooks.badge(id) or '') end
   return b
@@ -968,11 +968,11 @@ local function setkeys(buf)
   end)
   map('f', function() S.auto = not S.auto; S.jumped = nil; sync() end)
   map('a', act_ask)
-  map('r', act_repo)
   map('d', act_diff)
   -- PROTOTYPE qa-revisions: keys the active variant may claim; unclaimed ones fall back to the base action
-  local BASE = { a = act_ask, ['<Esc>'] = function() if S.port or S.overlay then leave() end end }
-  for _, k in ipairs({ 'a', 'A', 'p', 'y', 'x', 'R', 'Q', 'H', 'W', 'X', 'D', 't', 'K', '!', 'n', 'N', '[r', ']r', '{', '}', '<Esc>' }) do
+  local BASE = { a = act_ask, r = act_repo, ['<Esc>'] = function() if S.port or S.overlay then leave() end end }
+  for _, k in ipairs({ 'a', 'A', 'p', 'y', 'x', 'R', 'Q', 'H', 'W', 'X', 'D', 't', 'K', '!', 'n', 'N', '[r', ']r', '{', '}', '<Esc>',
+    'r', 's', 'e', 'S', 'L', 'u', 'b', 'B' }) do -- PROTOTYPE boundary: s e S L u b B r
     map(k, function()
       local f = M.vkeys[k]
       if f then f() elseif BASE[k] then BASE[k]() end
@@ -1113,5 +1113,6 @@ M._S, M._W, M._sync, M._select = S, W, sync, select
 M._ = { S = S, W = W, G = G, sync = sync, select = select, put = put, details = details, bars = bars, crumbs = crumbs,
   icon = icon, anchor_str = anchor_str, wrap = wrap, trunc = trunc, pad = pad, dw = dw, charbyte = charbyte,
   ports = ports, cur_edge = cur_edge, edge_label = edge_label, shape_name = shape_name, show_in_editor = show_in_editor,
-  keyname = keyname, panel_open = panel_open, editor_win = editor_win, ns = ns, kind_label = kind_label, reveal = reveal }
+  keyname = keyname, panel_open = panel_open, editor_win = editor_win, ns = ns, kind_label = kind_label, reveal = reveal,
+  describe = describe, decorate_all = decorate_all, badges = badges, style_of = style_of }
 return M
