@@ -233,13 +233,14 @@ function A.details()
     local function tag(s, hl) local i = l:find(s, 1, true); if i then c.hl(r, hl, vim.fn.strchars(l:sub(1, i - 1)), vim.fn.strchars(l:sub(1, i - 1)) + vim.fn.strchars(s)) end end
     tag('+ added', 'DDRevAdd'); tag('~ changed', 'DDRevChg'); tag('- removed', 'DDRevDel'); tag('▒ has changes inside', 'DDRevIn')
     c.add('')
-    A.revrow = {}
+    A.revrow, A.revhead = {}, {}
     for _, rv in ipairs(C.revisions) do
       local on = C.ov and not C.ov.pending and rv.n >= C.ov.from and rv.n <= C.ov.to
       local row = c.add(string.format(' ▌ r%-2d %-11s %s', rv.n, rv.kind, U.trunc(rv.reason, w - 20)), on and 'Normal' or 'Comment')
       c.hl(row, rv.kind == 'correction' and 'DiagnosticWarn' or 'DiagnosticInfo', 7, 18)
       c.hl(row, on and 'DDCardTitle' or 'DDDim', 1, 2)
       A.revrow[row] = rv.n
+      A.revhead[#A.revhead + 1] = row
       local r2 = c.add(' ▌            asked “' .. rv.q .. '”  · ' .. #rv.ops .. ' op' .. (#rv.ops > 1 and 's' or ''), 'Comment')
       c.hl(r2, on and 'DDCardTitle' or 'DDDim', 1, 2)
       A.revrow[r2] = rv.n
@@ -266,7 +267,7 @@ local function a_tab(t) A.tab = t; a_redraw() end
 function A.revs_bar()
   local shown = C.ov and not C.ov.pending and C.ov_label()
   return '%#DDMode# REVISIONS %#Normal# graph shows ' .. (shown and ('%#DDCardTitle#' .. shown .. '%#Normal#') or 'nothing') ..
-    '%=' .. chip('j k', 'preview') .. chip('V', 'range') ..
+    '%=' .. chip('j k', 'next / prev revision') .. chip('V', 'range') ..
     chip('⏎', 'keep on graph') .. chip('q', 'close')
 end
 local function a_revs_preview()
@@ -282,10 +283,35 @@ local function a_revs_preview()
   if not lo then return end
   if C.ov and not C.ov.pending and C.ov.from == lo and C.ov.to == hi then return end
   ov_set(lo, hi)
-  gsync()
+  -- the map walks into the revision under the cursor: its first changed step becomes the selection
+  local n, tgt = A.revrow[vim.fn.line('.') - 1]
+  for _, r in ipairs(C.revisions) do
+    if r.n == n then
+      for _, op in ipairs(r.ops) do if op.what == 'step' and G.steps[op.id] then tgt = op.id; break end end
+    end
+  end
+  if tgt then
+    U.S.sel, U.S.port, U.S.overlay = tgt, nil, nil
+    U.sync { nojump = true }
+  else gsync() end
+end
+-- j/k in the list step between revisions, not lines (works in V too)
+local function a_revs_step(dir)
+  if A.tab ~= 'revs' or not A.revhead or #A.revhead == 0 then return dir > 0 and 'j' or 'k' end
+  local cur = vim.fn.line('.') - 1
+  local tgt
+  if dir > 0 then
+    for _, r in ipairs(A.revhead) do if r > cur then tgt = r; break end end
+  else
+    for i = #A.revhead, 1, -1 do if A.revhead[i] < cur and A.revrow[cur] ~= A.revrow[A.revhead[i]] then tgt = A.revhead[i]; break end end
+  end
+  if not tgt then return '' end
+  local d = tgt - cur
+  return math.abs(d) .. (d > 0 and 'j' or 'k')
 end
 local function a_revs_enter()
   if #C.revisions == 0 or not U.panel_open() then return a_tab('revs') end
+  if A.tab ~= 'revs' or api.nvim_get_current_win() ~= U.W.det then A.prev_sel = U.S.sel end
   A.tab = 'revs'
   a_redraw()
   api.nvim_set_current_win(U.W.det)
@@ -296,9 +322,13 @@ local function a_revs_enter()
 end
 local function a_revs_leave(keep)
   if vim.fn.mode():match('^[vV\22]') then vim.cmd('normal! \27') end
-  if not keep then C.ov = nil end
+  if not keep then
+    C.ov = nil
+    if A.prev_sel then U.S.sel = A.prev_sel end
+  end
+  A.prev_sel = nil
   if U.panel_open() then api.nvim_set_current_win(U.W.main) end
-  gsync()
+  if keep then gsync() elseif U.panel_open() then U.sync { nojump = true } end
 end
 local function a_dive(on) if A.dive ~= on then A.dive = on; gsync() end end
 
@@ -396,10 +426,17 @@ local function a_det_keys()
     y = ACTA.y, x = ACTA.x, R = ACTA.R, Q = ACTA.Q, H = ACTA.H, W = ACTA.W, X = ACTA.X,
   }
   A.dk = vim.tbl_keys(K)
+  A.dk[#A.dk + 1] = 'j'; A.dk[#A.dk + 1] = 'k'
   for k, fn in pairs(K) do bmap(b, k, function() if V.cur() == A then fn() end end) end
   -- the same keys while a V range is selected
   for k, fn in pairs({ ['<CR>'] = K['<CR>'], q = K.q }) do bmap(b, k, function() if V.cur() == A then fn() end end, 'x') end
-  A.dkx = { '<CR>', 'q' }
+  A.dkx = { '<CR>', 'q', 'j', 'k' }
+  for _, k in ipairs({ 'j', 'k' }) do
+    vim.keymap.set({ 'n', 'x' }, k, function()
+      if V.cur() ~= A then return k end
+      return a_revs_step(k == 'j' and 1 or -1)
+    end, { buffer = b, expr = true, nowait = true, silent = true })
+  end
   api.nvim_create_autocmd({ 'CursorMoved', 'ModeChanged' }, { buffer = b, callback = function() vim.schedule(a_revs_preview) end })
 end
 A.keys = {

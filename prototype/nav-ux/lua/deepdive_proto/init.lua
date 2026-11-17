@@ -1113,5 +1113,5 @@ M._S, M._W, M._sync, M._select = S, W, sync, select
 M._ = { S = S, W = W, G = G, sync = sync, select = select, put = put, details = details, bars = bars, crumbs = crumbs,
   icon = icon, anchor_str = anchor_str, wrap = wrap, trunc = trunc, pad = pad, dw = dw, charbyte = charbyte,
   ports = ports, cur_edge = cur_edge, edge_label = edge_label, shape_name = shape_name, show_in_editor = show_in_editor,
-  keyname = keyname, panel_open = panel_open, editor_win = editor_win, ns = ns, kind_label = kind_label }
+  keyname = keyname, panel_open = panel_open, editor_win = editor_win, ns = ns, kind_label = kind_label, reveal = reveal }
 return M
