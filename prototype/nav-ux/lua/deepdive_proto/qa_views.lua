@@ -297,8 +297,19 @@ function A.revs_bar()
     '%=' .. chip('j k', 'next / prev revision') .. chip('V', 'range') ..
     chip('⏎', 'keep on graph') .. chip('q', 'close') .. chip('⇥', 'graph, keep')
 end
+-- focus / tab switches never move the graph: the pane's CursorMoved previews only react to a real cursor move
+-- (entering a window fires CursorMoved even when the cursor did not move)
+local function a_moved()
+  if vim.fn.mode():match('^[vV\22]') then A.entry = nil; return true end
+  local c = api.nvim_win_get_cursor(0)
+  if A.entry and A.entry[1] == c[1] and A.entry[2] == c[2] then return false end
+  A.entry = nil
+  return true
+end
+local function a_arm() if U.panel_open() then A.entry = api.nvim_win_get_cursor(U.W.det) end end
 local function a_revs_preview()
   if V.cur() ~= A or A.tab ~= 'revs' or not U.panel_open() or api.nvim_get_current_win() ~= U.W.det then return end
+  if not a_moved() then return end
   local a, b = vim.fn.line('.'), vim.fn.line('.')
   local m = vim.fn.mode()
   if m == 'V' or m == 'v' or m == '\22' then a = vim.fn.line('v') end
@@ -384,15 +395,15 @@ local function a_cycle(d)
     local last
     for row, n in pairs(A.revrow) do if n == #C.revisions and (not last or row < last) then last = row end end
     pcall(api.nvim_win_set_cursor, U.W.det, { (last or 0) + 1, 0 })
-    if in_pane then a_revs_preview() end
   end
+  a_arm()
 end
 -- ⇥: graph <-> the focused tab (from the prompt or any card: back to the graph)
 local function a_toggle()
   if not U.panel_open() then return end
   if api.nvim_get_current_win() == U.W.main then
+    a_arm()
     api.nvim_set_current_win(U.W.det)
-    if A.tab == 'revs' then a_revs_preview() end
   else
     if vim.fn.mode():match('^[vV\22]') then vim.cmd('normal! \27') end
     vim.cmd('stopinsert')
@@ -996,7 +1007,7 @@ Cv.help = {
 local VARS = { A }
 function V.cur() return VARS[V.i] end
 V.A = A
-V.api = { render_fix = function(c, w) return A.render_fix(c, w) end, cycle = function(d) return a_cycle(d) end,
+V.api = { moved = function() return a_moved() end, arm = function() return a_arm() end, render_fix = function(c, w) return A.render_fix(c, w) end, cycle = function(d) return a_cycle(d) end,
   toggle = function() return a_toggle() end, prompt = function(...) return a_prompt(...) end, redraw = function() return a_redraw() end,
   tab = function(t) return a_tab(t) end, chip = chip, esc = esc, hintbar = function() return a_hintbar() end,
   gsync = gsync, focus = focus, cite_at = cite_at, bmap = bmap, scratch = scratch, winopts = winopts, valid = valid,

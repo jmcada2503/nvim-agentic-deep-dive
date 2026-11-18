@@ -345,6 +345,7 @@ for n = 1, 9 do VB.dkeys[tostring(n)] = function() pick_n(vb_id(), n) end end
 -- walking the list walks the map
 local function vb_preview()
   if BV.cur() ~= VB or QA.tab ~= 'fix' or not U.panel_open() or api.nvim_get_current_win() ~= U.W.det then return end
+  if not X.moved() then return end
   local id = vb_row_id()
   if id and id ~= sel() then
     local cur = api.nvim_win_get_cursor(U.W.det)
