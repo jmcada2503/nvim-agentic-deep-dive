@@ -11,7 +11,7 @@ vim.o.laststatus = 2
 vim.cmd('syntax on | filetype plugin on')
 require('deepdive_proto').setup()
 require('deepdive_proto.qa_views').setup() -- Q&A: variant A (decided)
-require('deepdive_proto.bd_views').setup() -- boundary prototype: 3 variants, [v ]v
+require('deepdive_proto.bd_views').setup() -- boundary prototype: variant B (decided)
 vim.api.nvim_create_autocmd('VimEnter', { callback = function()
-  vim.api.nvim_echo({ { 'Deep dive prototype: ', 'Title' }, { '␣dd panel · the dive is paused at a Boundary · [v ]v Boundary variant · ? keys', 'Comment' } }, false, {})
+  vim.api.nvim_echo({ { 'Deep dive prototype: ', 'Title' }, { 'the dive is paused at a Boundary: Run tab · ⇥ graph/tab · t T tabs · ? keys', 'Comment' } }, false, {})
 end })

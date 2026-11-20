@@ -240,7 +240,7 @@ local function pause(id, stage_title, text, guess_note)
   B.dive.stages[#B.dive.stages + 1] = { title = stage_title, st = 'paused' }
   dlog('needs_input → asking you' .. (guess_note and (' · ' .. guess_note) or ''), '⏸', 'DDRevChg')
   emit('graph')
-  vim.notify('Deep dive paused: ' .. text, vim.log.levels.WARN)
+  -- no notification: the views open the panel on Run, focused on the question (after insert mode ends)
 end
 
 local function run_items(items, done)
@@ -315,6 +315,32 @@ function B.answer(kind, repo)
       finish_stage()
     end
   end)
+end
+
+-- the user typed an answer in Run's prompt: the (scripted) agent reads it. Returns the agent's reply.
+function B.answer_text(text)
+  local q = B.q
+  if not q then return nil end
+  local id = q.step
+  local t = text:lower()
+  local cands = B.candidates(id)
+  local n = tonumber(t:match('^%s*(%d)%s*$'))
+  if n and cands[n] then B.answer('repo', { id = cands[n].id, path = cands[n].path }); return 'Taking ' .. cands[n].id .. '.' end
+  for word in text:gmatch('%S+') do
+    if word:find('/', 1, true) then
+      local r = B.from_path(word)
+      if r then B.answer('repo', r); return 'Taking ' .. r.id .. ' at ' .. B.short(r.path) .. '.' end
+    end
+  end
+  for _, cd in ipairs(cands) do
+    if t:find(cd.id, 1, true) then B.answer('repo', { id = cd.id, path = cd.path }); return 'Taking ' .. cd.id .. '.' end
+  end
+  if t:find('extern') or t:find('third') or t:find('vendor') or t:find('stripe') or t:find('not ours') then
+    B.answer('external'); return 'Marked external; the dive goes on.'
+  end
+  if t:find('skip') or t:find('follow') or t:find('ignore') then B.answer('declined'); return 'Not following it; the dive goes on.' end
+  if t:find('later') then B.answer('later'); return 'Left unresolved; the dive goes on.' end
+  return 'I could not tell. Name a repo (number, name or path), or say external, skip or later.'
 end
 
 -- ---------- after the dive: status changes and "specify repo" ----------

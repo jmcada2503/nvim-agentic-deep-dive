@@ -73,7 +73,7 @@ local function status_chips(id, s, n, path_label)
   elseif s == 'resolved' then
     return chip('u', 'reopen') .. chip('⏎', 'zoom in')
   elseif s == 'pending' then
-    return chip('t', 'to Review')
+    return chip('y', 'accept') .. chip('R', 'reject + note')
   end
   return ''
 end
@@ -110,7 +110,7 @@ local function va_specify(id)
 end
 VA.extra = {
   tabname = run_name,
-  has_prompt = function(t) return t == 'details' and sel_bd() ~= nil end,
+  has_prompt = function(t) if t == 'details' and sel_bd() then return true end end,
   tall = function(t) return t == 'details' and sel_bd() ~= nil end,
   render = function(t, c, w)
     if t == 'fix' then
@@ -183,28 +183,72 @@ VA.help = {
 }
 
 -- =====================================================================
--- B: Boundaries inbox tab + picker float
+-- B (chosen): Run = what the agent is doing or waiting on, for the whole dive
+--   strip · NEEDS YOU (dive question, Pending revision, stuck Fix run) · IN PROGRESS (Fix run, Boundary being read)
+--   · UNRESOLVED · SETTLED · facts of the selected Boundary.  The prompt talks to the focused run.
 -- =====================================================================
-local VB = { key = 'B', name = 'Inbox in Run (picker)', rows = {} }
-local SECT = {
-  { 'NEEDS YOU', { waiting = 1 } }, { 'IN PROGRESS', { reading = 1, extending = 1, pending = 1 } },
-  { 'UNRESOLVED', { unresolved = 1 } }, { 'SETTLED', { external = 1, declined = 1, resolved = 1 } },
-}
-local function vb_counts()
-  local n = { w = 0, u = 0 }
-  for _, id in ipairs(every_bd()) do
-    local s = B.status(id)
-    if s == 'waiting' then n.w = n.w + 1 elseif s == 'unresolved' then n.u = n.u + 1 end
+local VB = { key = 'B', name = 'Run: needs you + Boundaries', rows = {}, heads = {}, chats = {}, seen_t = {} }
+local ICON = { waiting = '⏸', reading = '⟳', extending = '⟳', pending = '●', unresolved = '⚠', external = '↗', declined = '⊘', resolved = '✓' }
+local BSECT = { { 'UNRESOLVED', { unresolved = 1 } }, { 'SETTLED', { external = 1, declined = 1, resolved = 1 } } }
+
+-- ---------- run items: what an agent is doing or waiting on ----------
+local function stamp(key) VB.seen_t[key] = VB.seen_t[key] or vim.uv.hrtime(); return VB.seen_t[key] end
+local function run_items()
+  local needs, prog = {}, {}
+  if B.q then needs[#needs + 1] = { key = 'q:' .. B.q.step, kind = 'question', step = B.q.step, run = true } end
+  if C.pending then
+    needs[#needs + 1] = { key = 'pend:' .. C.pending.n, kind = 'pending', step = C.pending.p.target, run = true }
+  elseif C.fix and C.fix.state == 'failed' then
+    needs[#needs + 1] = { key = 'fix:' .. C.fix.p.id, kind = 'stuck', step = C.fix.p.target, run = true }
+  elseif C.fix then
+    prog[#prog + 1] = { key = 'fix:' .. C.fix.p.id, kind = 'running', step = C.fix.p.target, run = true }
   end
-  return n
+  for _, it in ipairs(needs) do it.t = stamp(it.key) end
+  table.sort(needs, function(a, b) return a.t < b.t end) -- oldest first
+  return needs, prog
 end
-local function vb_row_id()
+local function row_item()
   if QA.tab ~= 'fix' or not valid(U.W.det) then return nil end
   return VB.rows[api.nvim_win_get_cursor(U.W.det)[1] - 1]
 end
-local function vb_id() return vb_row_id() or sel_bd() end
-local ICON = { waiting = '⏸', reading = '⟳', extending = '⟳', pending = '●', unresolved = '⚠', external = '↗', declined = '⊘', resolved = '✓' }
+-- focus: the cursor row in the pane; the selection from the graph; otherwise the oldest
+local function focus_run()
+  local needs, prog = run_items()
+  local all = vim.list_extend(vim.list_extend({}, needs), prog)
+  if #all == 0 then return nil end
+  if U.panel_open() and api.nvim_get_current_win() ~= U.W.main then
+    local r = row_item()
+    if r and r.run then for _, it in ipairs(all) do if it.key == r.key then return it end end end
+  end
+  for _, it in ipairs(all) do if it.step == sel() then return it end end
+  return all[1]
+end
+-- single keys on a row: the row's Boundary, else the selected one
+local function vb_id()
+  local r = row_item()
+  if r and r.step and B.status(r.step) then return r.step end
+  return sel_bd()
+end
 
+-- ---------- inline chat under an item ----------
+local function chat(key) VB.chats[key] = VB.chats[key] or {}; return VB.chats[key] end
+local function say(key, who, text) table.insert(chat(key), { who = who, text = text }); C.emit('thread') end
+local function render_chat(c, key, w)
+  local ch = VB.chats[key]
+  if not ch or #ch == 0 then return end
+  local from = math.max(1, #ch - 3)
+  if from > 1 then c.add('     ╶ ' .. (from - 1) .. ' earlier', 'Comment') end
+  for k = from, #ch do
+    local m = ch[k]
+    local lab = m.who == 'you' and 'you  ' or 'agent'
+    for i, l in ipairs(C.wrap(m.text, w - 14)) do
+      local r = c.add('     ' .. (i == 1 and lab or '     ') .. '  ' .. l, m.who == 'you' and 'DDYouText' or nil)
+      if i == 1 then c.hl(r, m.who == 'you' and 'DDYou' or 'DDAgent', 5, 10) end
+    end
+  end
+end
+
+-- ---------- the picker (specify repo) ----------
 function VB.picker(id)
   id = id or vb_id()
   if not id then return warn('select a Boundary (⇢) first') end
@@ -228,8 +272,7 @@ function VB.picker(id)
   c.hl(rp, 'DDKey', 2, 3)
   rows[rp] = 'path'
   c.add('')
-  local keys = '  ⏎ pick · p path · e external · S don’t follow' .. (B.q and B.q.step == id and ' · L later' or '') .. ' · q close'
-  c.add(keys, 'DDKeyHint')
+  c.add('  ⏎ pick · p path · e external · S don’t follow' .. (B.q and B.q.step == id and ' · L later' or '') .. ' · q close', 'DDKeyHint')
   local buf = X.scratch('deepdive://bd-picker')
   vim.bo[buf].modifiable = true
   U.put(buf, c.lines, c.hls)
@@ -254,122 +297,251 @@ function VB.picker(id)
   bmap(buf, 'q', close); bmap(buf, '<Esc>', close)
 end
 
+-- ---------- Run tab ----------
+local function bd_row(c, id, w)
+  local s = B.status(id)
+  local st = G.steps[id]
+  local tgt = st.boundary and st.boundary.target or ('→ ' .. st.resolved.repo .. ' · ' .. #G.children(id) .. ' Steps')
+  local r = c.add(string.format('  %s %-26s %-40s in %s', ICON[s], U.trunc(st.title, 26), U.trunc(tgt, 40), where(id)))
+  c.hl(r, B.LABEL[s][2], 2, 3)
+  c.hl(r, id == sel() and 'Visual' or 'Normal', 4, 30)
+  c.hl(r, 'Comment', 31)
+  if s == 'reading' then
+    local l = B.dive.log[#B.dive.log]
+    c.add('     ⟳ ' .. U.trunc(l and l.text or '', w - 8), 'DiagnosticInfo')
+  end
+end
+local function item_hint(it, insert)
+  local left
+  if it.kind == 'question' then left = '%#DDRevChg# ⏸ answer the dive %#Normal# ' .. esc(U.trunc(title(it.step), 24)) .. '  '
+  elseif it.kind == 'pending' then left = '%#DDRevChg# ● r' .. C.pending.n .. ' %#Normal# ask about it  '
+  elseif it.kind == 'stuck' then left = '%#DiagnosticError# ✗ ' .. C.fix.p.id .. ' stuck %#Normal# clarify  '
+  else left = '%#DiagnosticInfo# ⟳ ' .. C.fix.p.id .. ' %#Normal# ask it  ' end
+  if insert then return left, chip('⏎', 'send') .. chip('⇥', 'graph') .. chip('Esc', 'keys') end
+  local right
+  if it.kind == 'question' then
+    right = chip('1-' .. #B.candidates(it.step), 'pick') .. chip('s', 'picker') .. chip('e', 'external') .. chip('S', 'don’t follow') .. chip('L', 'later')
+  elseif it.kind == 'pending' then
+    right = chip('y', 'accept') .. chip('R', 'reject + note') .. chip('x', 'reject')
+  elseif it.kind == 'stuck' then
+    right = chip('H', 'hint + retry') .. chip('W', 'widen') .. chip('X', 'abandon')
+  else right = '' end
+  return left, right .. chip('i', 'type') .. chip('⇥', 'graph')
+end
 VB.extra = {
   tabname = run_name,
-  has_prompt = function() return false end,
+  has_prompt = function(t)
+    if t ~= 'fix' then return nil end
+    local n, p = run_items()
+    return #n + #p > 0
+  end,
   tall = function() return false end,
-  top = function(t) if t == 'fix' then return not (C.fix and not C.pending) end end,
+  top = function(t) if t == 'fix' then return true end end,
   render = function(t, c, w)
     if t ~= 'fix' then return false end
-    VB.rows = {}
-    if C.pending then X.render_fix(c, w); c.add('') end
+    VB.rows, VB.heads = {}, {}
+    local function mapr(from, item) for k = from, #c.lines - 1 do VB.rows[k] = item end end
     B.render_dive(c, w, ' ', true)
-    if B.dive.state == 'running' then
-      local l = B.dive.log[#B.dive.log]
-      c.add('    ⟳ ' .. (l and l.text or '…'), 'DiagnosticInfo')
+    local needs, prog = run_items()
+    if #needs > 0 then
+      c.add(''); c.add(' NEEDS YOU', 'Title')
+      for i, it in ipairs(needs) do
+        if i > 1 then c.add('') end
+        local from = #c.lines
+        VB.heads[it.key] = from
+        if it.kind == 'question' then
+          c.add('  ⏸ ' .. title(it.step) .. '  ·  the dive waits for you  ·  in ' .. where(it.step), 'DDRevChg')
+          for _, l in ipairs(C.wrap(B.q.text, w - 8)) do c.add('     ' .. l) end
+          local info = B.info[it.step] or {}
+          if info.guess and info.guess.kind == 'external' then c.add('     agent suggests  ↗ external · ' .. info.guess.why, 'DiagnosticHint') end
+          B.render_cands(c, it.step, w, '     ')
+        elseif it.kind == 'pending' then
+          c.add('  ● review  ·  on “' .. title(it.step) .. '”', 'DDRevChg')
+          C.render_review(c, w, '     ', nil)
+        else
+          c.add('  ✗ Fix run ' .. C.fix.p.id .. ' stuck  ·  attempt ' .. C.fix.attempt .. '  ·  on “' .. title(it.step) .. '”', 'DiagnosticError')
+          C.render_fix(c, C.fix, w, '     ', ' ')
+        end
+        render_chat(c, it.key, w)
+        mapr(from, it)
+      end
     end
-    local ids = every_bd()
-    for _, sec in ipairs(SECT) do
-      local mine = vim.tbl_filter(function(id) return sec[2][B.status(id)] end, ids)
+    local reading = vim.tbl_filter(function(id) return B.status(id) == 'reading' end, every_bd())
+    if #prog + #reading > 0 then
+      c.add(''); c.add(' IN PROGRESS', 'Title')
+      for _, it in ipairs(prog) do
+        local from = #c.lines
+        VB.heads[it.key] = from
+        c.add('  ⟳ Fix run ' .. C.fix.p.id .. '  ·  on “' .. title(it.step) .. '”  ·  scope ' .. C.fix.p.scope, 'DiagnosticInfo')
+        C.render_fix(c, C.fix, w, '     ')
+        render_chat(c, it.key, w)
+        mapr(from, it)
+      end
+      for _, id in ipairs(reading) do
+        local from = #c.lines
+        bd_row(c, id, w)
+        mapr(from, { key = 'bd:' .. id, step = id })
+      end
+    end
+    for _, sec in ipairs(BSECT) do
+      local mine = vim.tbl_filter(function(id) return sec[2][B.status(id)] end, every_bd())
       if #mine > 0 then
-        c.add('')
-        c.add(' ' .. sec[1], 'Title')
+        c.add(''); c.add(' ' .. sec[1], 'Title')
         for _, id in ipairs(mine) do
-          local s = B.status(id)
-          local st = G.steps[id]
-          local tgt = st.boundary and st.boundary.target or ('→ ' .. st.resolved.repo .. ' · ' .. #G.children(id) .. ' Steps')
-          local r = c.add(string.format(' %s %-26s %-44s in %s', ICON[s], U.trunc(st.title, 26), U.trunc(tgt, 44), where(id)))
-          c.hl(r, B.LABEL[s][2], 1, 2)
-          c.hl(r, id == sel() and 'Visual' or 'Normal', 3, 29)
-          c.hl(r, 'Comment', 30)
-          VB.rows[r] = id
-          if s == 'waiting' then
-            for _, l in ipairs(C.wrap(B.q.text, w - 8)) do VB.rows[c.add('     ' .. l, 'DDRevChg')] = id end
-            local before = #c.lines
-            B.render_cands(c, id, w, '     ')
-            for k = before, #c.lines - 1 do VB.rows[k] = id end
-          elseif s == 'reading' then
-            local l = B.dive.log[#B.dive.log]
-            VB.rows[c.add('     ⟳ ' .. (l and l.text or ''), 'DiagnosticInfo')] = id
-          elseif s == 'extending' or s == 'pending' then
-            VB.rows[c.add('     ' .. B.LABEL[s][1] .. ' (below)', B.LABEL[s][2])] = id
-          end
+          local from = #c.lines
+          bd_row(c, id, w)
+          mapr(from, { key = 'bd:' .. id, step = id })
         end
       end
     end
-    -- the facts of the Boundary under the cursor
     local cur = sel_bd()
     if cur then
       c.add('')
       c.add(' ' .. string.rep('─', w - 2), 'DDDim')
+      c.add(' ⇢ ' .. title(cur), 'DiagnosticWarn')
       B.render_facts(c, cur, w, ' ')
     end
-    if C.fix and not C.pending then c.add(''); X.render_fix(c, w) end
     return true
   end,
   hint = function(t, insert)
-    if t ~= 'fix' or insert or C.fix or C.pending then return nil end
-    local id = vb_id()
-    if not id then return '%#DDMode# BOUNDARIES %#Normal# ', chip('j k', 'walk') .. chip('⇥', 'graph') end
+    if t ~= 'fix' then return nil end
+    local it = focus_run()
+    if not it then return nil end
+    VB.fkey = it.key
+    return item_hint(it, insert)
+  end,
+  -- the Boundary row under the cursor: its keys, in the pane's status line
+  statusline = function(t)
+    if t ~= 'fix' then return nil end
+    local r = row_item()
+    local id = not (r and r.run) and vb_id()
+    if not id then return '%#DDMode# RUN %#Normal#%=' .. chip('j k', 'walk') .. chip('⇥', 'graph') end
     local s = B.status(id)
-    return status_left(id, s), status_chips(id, s, #B.candidates(id), 'picker') .. chip('j k', 'walk') .. chip('⇥', 'graph')
+    return status_left(id, s) .. '%=' .. status_chips(id, s, #B.candidates(id), 'picker') .. chip('j k', 'walk')
+  end,
+  -- free text in Run's prompt goes to the focused run
+  send = function(t, text)
+    if t ~= 'fix' then return false end
+    local it = focus_run()
+    if not it then return false end
+    if it.kind == 'stuck' then C.clarify(text); return true end
+    say(it.key, 'you', text)
+    if it.kind == 'question' then
+      local key = it.key
+      vim.defer_fn(function()
+        local reply = B.answer_text(text)
+        if reply and B.q and ('q:' .. B.q.step) == key then say(key, 'agent', reply) end
+      end, 400)
+    elseif it.kind == 'pending' then
+      local pr = C.pending
+      vim.defer_fn(function()
+        if C.pending ~= pr then return end
+        say(it.key, 'agent', 'r' .. pr.n .. ' makes ' .. #pr.ops .. ' change' .. (#pr.ops > 1 and 's' or '') ..
+          ' because: ' .. pr.reason .. ' If that is wrong, R rejects it with your note as feedback.')
+      end, 600)
+    else
+      vim.defer_fn(function()
+        local l = C.fix and C.fix.log[#C.fix.log]
+        say(it.key, 'agent', 'Still running. Last step: ' .. (l and l.text or '…') .. '. Your note does not change the run.')
+      end, 500)
+    end
+    return true
   end,
 }
-local function vb_open(id)
-  X.tab('fix')
+
+-- jump the pane cursor (and the graph) to an item; enter = focus the pane
+local function go_item(key, step, enter)
   if not U.panel_open() then return end
-  api.nvim_set_current_win(U.W.det)
-  id = id or G.waiting or every_bd()[1]
-  for r, rid in pairs(VB.rows) do
-    if rid == id then
-      local best = r
-      for r2, rid2 in pairs(VB.rows) do if rid2 == id and r2 < best then best = r2 end end
-      api.nvim_win_set_cursor(U.W.det, { best + 1, 0 })
-      break
-    end
+  if step and sel() ~= step then U.select(step) end
+  X.tab('fix')
+  local r = VB.heads[key]
+  if r then pcall(api.nvim_win_set_cursor, U.W.det, { r + 1, 0 }) end
+  if enter then api.nvim_set_current_win(U.W.det) end
+  X.arm()
+  X.redraw()
+  VB.snap = key
+end
+VB.extra.goto_pending = function() if C.pending then go_item('pend:' .. C.pending.n, C.pending.p.target, true) end end
+-- a dive pause: open the panel on Run, focused on the question; never while you are typing
+local function jump_to_pause()
+  local q = B.q
+  if not q then return end
+  if vim.fn.mode():match('^[iR]') then
+    if VB.wait_insert then return end
+    VB.wait_insert = true
+    api.nvim_create_autocmd('InsertLeave', { once = true, callback = function()
+      VB.wait_insert = false
+      vim.schedule(jump_to_pause)
+    end })
+    return
   end
+  if not U.panel_open() then P.open() end
+  go_item('q:' .. q.step, q.step, true)
+end
+local function vb_open()
+  if B.q then return go_item('q:' .. B.q.step, B.q.step, true) end
+  X.tab('fix')
+  if U.panel_open() then api.nvim_set_current_win(U.W.det) end
 end
 VB.keys = {
   s = function() if sel_bd() then VB.picker(sel_bd()) else vb_open() end end,
   e = function() mark(sel_bd(), 'external') end, S = function() mark(sel_bd(), 'declined') end,
   L = later, u = function() reopen(sel_bd()) end,
-  b = function() vb_open() end, B = function() vb_open() end,
+  b = vb_open, B = vb_open,
 }
 VB.keys.r = VB.keys.s
 VB.dkeys = {
   s = function() VB.picker(vb_id()) end, e = function() mark(vb_id(), 'external') end,
   S = function() mark(vb_id(), 'declined') end, L = later, u = function() reopen(vb_id()) end,
-  b = function() vb_open() end,
+  b = vb_open,
 }
 for n = 1, 9 do VB.dkeys[tostring(n)] = function() pick_n(vb_id(), n) end end
 -- walking the list walks the map
 local function vb_preview()
   if BV.cur() ~= VB or QA.tab ~= 'fix' or not U.panel_open() or api.nvim_get_current_win() ~= U.W.det then return end
   if not X.moved() then return end
-  local id = vb_row_id()
-  if id and id ~= sel() then
+  local it = row_item()
+  if it and it.step and it.step ~= sel() then
     local cur = api.nvim_win_get_cursor(U.W.det)
-    U.S.sel, U.S.port, U.S.overlay = id, nil, nil
+    U.S.sel, U.S.port, U.S.overlay = it.step, nil, nil
     U.sync { nojump = true }
     pcall(api.nvim_win_set_cursor, U.W.det, cur)
-  else
-    X.hintbar()
   end
+  vim.wo[U.W.det].statusline = VB.extra.statusline('fix')
+  X.hintbar()
+  VB.snap = VB.fkey
 end
 function VB.on_open()
   if VB.au then return end
   VB.au = api.nvim_create_autocmd('CursorMoved', { buffer = U.W.dbuf, callback = function() vim.schedule(vb_preview) end })
 end
 function VB.render()
+  local paused = false
   if B.q and VB.seen ~= B.q then
-    if U.panel_open() then VB.seen = B.q; U.select(B.q.step) end
-    X.tab('fix')
+    VB.seen = B.q
+    paused = true
+    vim.schedule(jump_to_pause)
   end
-  if C.fix and C.fix.p.bd and VB.fixseen ~= C.fix.p then VB.fixseen = C.fix.p; X.tab('fix') end
+  -- the focused item was resolved: move to the next one that needs you, the graph follows
+  local needs = run_items()
+  local live = {}
+  for _, it in ipairs(needs) do live[it.key] = true end
+  -- (VB.snap: the focus as it was after the last render / cursor move; the hint bar may already have moved VB.fkey)
+  local f = VB.snap
+  if f and not live[f] then
+    if not paused and #needs > 0 and U.panel_open() then -- a new dive question jumps by itself
+      local it = needs[1]
+      vim.schedule(function() go_item(it.key, it.step, api.nvim_get_current_win() == U.W.det) end)
+    end
+    VB.snap = nil
+  else
+    VB.snap = VB.fkey
+  end
 end
 VB.help = {
-  { 'BOUNDARY (B: inbox in Run)' }, { 'b', 'Run tab, waiting row' }, { 'j k', 'walk list (map follows)' }, { 's', 'specify repo: picker' },
-  { '1-9', 'pick a listed repo (tab)' }, { 'e', 'mark external' }, { 'S', 'don’t follow (declined)' }, { 'L', 'later' }, { 'u', 'reopen' },
+  { 'RUN TAB' }, { 'b', 'Run, on what needs you' }, { 'j k', 'walk (map follows)' }, { 'i', 'type to the focused run' },
+  { 's', 'specify repo: picker' }, { '1-9', 'pick a listed repo' }, { 'e', 'mark external' }, { 'S', 'don’t follow (declined)' },
+  { 'L', 'later' }, { 'u', 'reopen' },
 }
 
 -- =====================================================================
@@ -378,7 +550,7 @@ VB.help = {
 local VC = { key = 'C', name = 'On the map (ghost + card)', ghosts = {} }
 VC.extra = {
   tabname = run_name,
-  has_prompt = function() return false end,
+  has_prompt = function() end,
   tall = function() return false end,
   hint = function() return nil end,
   render = function(t, c, w)
@@ -587,7 +759,7 @@ VC.help = {
 -- =====================================================================
 -- switcher + wiring
 -- =====================================================================
-local VARS = { VA, VB, VC }
+local VARS = { VB } -- decided: B. A and C stay in the file (and in git history) for the record
 function BV.cur() return VARS[BV.i] end
 
 local function pill()
@@ -662,7 +834,7 @@ function BV.setup()
     vim.schedule(function() BV.cur().render('graph') end)
   end
   P.hooks.help = function()
-    return vim.list_extend(vim.list_extend({ { 'PROTOTYPE' }, { '[v ]v', 'switch Boundary variant' } }, qa.help()), BV.cur().help or {})
+    return vim.list_extend(qa.help(), BV.cur().help or {})
   end
   P.vkeys = setmetatable({}, { __index = function(_, k)
     local f = BV.cur().keys[k]
@@ -675,7 +847,7 @@ function BV.setup()
   api.nvim_create_autocmd('VimResized', { callback = pill })
   local start = (vim.env.DD_VARIANT or 'A'):upper()
   for k, v in ipairs(VARS) do if v.key == start then BV.i = k end end
-  vim.schedule(function() vim.schedule(function() activate(); pill() end) end)
+  vim.schedule(function() vim.schedule(function() activate() end) end)
 end
 
 return BV

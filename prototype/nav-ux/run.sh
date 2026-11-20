@@ -2,7 +2,6 @@
 # PROTOTYPE: open the demo workspace (storefront + orders-service) with the deep-dive panel prototype.
 #   ./run.sh          minimal config (leader = space)
 #   ./run.sh --mine   your own nvim config + the prototype (your leader)
-#   DD_VARIANT=B ./run.sh   start on Boundary variant A, B or C
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE/demo" || exit 1
 FILE=storefront/src/features/checkout/CheckoutPage.tsx

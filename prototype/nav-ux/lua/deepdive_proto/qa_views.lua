@@ -127,7 +127,13 @@ local function a_tabname(t)
   end
   return 'Info'
 end
-local function a_has_prompt() return A.tab == 'thread' or A.tab == 'fix' or (A.extra and A.extra.has_prompt(A.tab)) or false end
+local function a_has_prompt()
+  if A.extra and A.extra.has_prompt then
+    local r = A.extra.has_prompt(A.tab) -- true / false decide; nil = default
+    if r ~= nil then return r end
+  end
+  return A.tab == 'thread' or A.tab == 'fix'
+end
 local function a_in_prompt() return valid(A.iw) and api.nvim_get_current_win() == A.iw end
 
 -- the hint bar over the prompt: what you can do right now (C-style key chips, by state)
@@ -200,7 +206,7 @@ local function a_winbar()
   end
   local here = api.nvim_get_current_win() == U.W.det or (valid(A.iw) and api.nvim_get_current_win() == A.iw)
   vim.wo[U.W.det].winbar = s .. '%=' .. chip('t T', 'tab') .. chip('⇥', here and 'graph' or 'focus')
-  vim.wo[U.W.det].statusline = A.tab == 'revs' and A.revs_bar() or ' '
+  vim.wo[U.W.det].statusline = A.tab == 'revs' and A.revs_bar() or (A.extra and A.extra.statusline and A.extra.statusline(A.tab)) or ' '
   a_prompt_win()
   api.nvim_win_set_height(U.W.det, (A.tab == 'details' and not (A.extra and A.extra.tall(A.tab))) and 14 or 21)
   a_hintbar()
@@ -271,7 +277,30 @@ function A.render_revs(c, w)
       c.hl(r2, on and 'DDCardTitle' or 'DDDim', 1, 2)
       A.revrow[r2] = rv.n
     end
-    if C.pending then c.add(string.format('   r%-2d %-11s %s', C.pending.n, C.pending.kind, 'pending: see the Run tab'), 'DiagnosticHint') end
+    A.revpend = nil
+    if C.pending then
+      A.revpend = c.add(string.format(' ● r%-2d %-11s %s', C.pending.n, C.pending.kind, 'pending · review it in Run (⏎)'), 'DDRevChg')
+    end
+    -- the revision under the cursor (or the one the graph shows), in full
+    local n = valid(U.W.det) and A.revrow[api.nvim_win_get_cursor(U.W.det)[1] - 1]
+    if not n and C.ov and not C.ov.pending then n = C.ov.to end
+    local rv
+    for _, r in ipairs(C.revisions) do if r.n == n then rv = r end end
+    if rv then
+      c.add('')
+      c.add(' ' .. string.rep('─', w - 2), 'DDDim')
+      c.add(' r' .. rv.n .. ' · ' .. rv.kind, 'DDCardTitle')
+      for _, l in ipairs(C.wrap('reason  ' .. rv.reason, w - 4)) do c.add(' ' .. l) end
+      c.add(' asked   “' .. rv.q .. '”', 'Comment')
+      for _, op in ipairs(rv.ops) do
+        local name = op.what == 'step' and ('“' .. (op.title or (G.steps[op.id] and G.steps[op.id].title) or op.id) .. '”') or op.id
+        local sym = op.op == 'add' and '+' or (op.op == 'remove' and '-' or '~')
+        c.add(' ' .. sym .. ' ' .. op.op .. ' ' .. op.what .. ' ' .. name .. (op.field and ('  · ' .. op.field) or ''), op.op == 'add' and 'DDRevAdd' or 'DDRevChg')
+        if op.before then for _, l in ipairs(C.wrap(op.before, w - 8)) do c.add('    − ' .. l, 'DiffDelete') end end
+        if op.after then for _, l in ipairs(C.wrap(op.after, w - 8)) do c.add('    + ' .. l, 'DiffAdd') end end
+        if op.note then c.add('    ✎ ' .. op.note, 'DDNote') end
+      end
+    end
   end
 end
 local function a_redraw()
@@ -328,10 +357,12 @@ local function a_revs_preview()
       for _, op in ipairs(r.ops) do if op.what == 'step' and G.steps[op.id] then tgt = op.id; break end end
     end
   end
+  local cur = api.nvim_win_get_cursor(U.W.det)
   if tgt then
     U.S.sel, U.S.port, U.S.overlay = tgt, nil, nil
     U.sync { nojump = true }
   else gsync() end
+  pcall(api.nvim_win_set_cursor, U.W.det, cur)
 end
 -- j/k in the list step between revisions, not lines (works in V too)
 local function a_revs_step(dir)
@@ -361,7 +392,7 @@ end
 local function a_revs_leave(keep)
   if vim.fn.mode():match('^[vV\22]') then vim.cmd('normal! \27') end
   if not keep then
-    C.ov = nil
+    C.ov = C.pending and { pending = true } or nil
     if A.prev_sel then U.S.sel = A.prev_sel end
   end
   A.prev_sel = nil
@@ -380,7 +411,7 @@ local function a_cycle(d)
   local in_pane = U.panel_open() and (cur == U.W.det or (valid(A.iw) and cur == A.iw))
   if A.tab == 'revs' then
     if vim.fn.mode():match('^[vV\22]') then vim.cmd('normal! \27') end
-    if C.ov and not C.ov.pending then C.ov = nil end
+    if C.ov and not C.ov.pending then C.ov = C.pending and { pending = true } or nil end
     A.prev_sel = nil
   end
   vim.cmd('stopinsert')
@@ -432,6 +463,7 @@ local function a_send()
   A.imode = nil
   if text == '' and not (im and im.empty_ok) then a_hintbar() return end
   if im then im.send(text)
+  elseif A.extra and A.extra.send and A.extra.send(A.tab, text) then -- PROTOTYPE boundary: Run talks to the focused run
   elseif A.tab == 'fix' and failed() then C.clarify(text)
   else
     if A.tab ~= 'thread' then A.tab = 'thread' end
@@ -497,7 +529,13 @@ local function a_det_keys()
   A.dkeys = true
   local function row() return api.nvim_win_get_cursor(0)[1] - 1 end
   local K = {
-    ['<CR>'] = function() if A.tab == 'revs' then a_revs_leave(true) else cite_at(A.cv, 0) end end,
+    ['<CR>'] = function()
+      if A.tab == 'revs' and A.revpend and row() == A.revpend and A.extra and A.extra.goto_pending then
+        C.ov = { pending = true }
+        return A.extra.goto_pending()
+      end
+      if A.tab == 'revs' then a_revs_leave(true) else cite_at(A.cv, 0) end
+    end,
     ['<Esc>'] = function() if A.tab == 'revs' then a_revs_leave(false) end end,
     q = function()
       if A.tab == 'revs' then a_revs_leave(false)
@@ -533,7 +571,7 @@ A.keys = {
   ['<Tab>'] = a_toggle,
   ['<Esc>'] = function()
     if A.dive then a_dive(false); a_redraw()
-    elseif C.ov and not C.ov.pending then C.ov = nil; gsync()
+    elseif C.ov and not C.ov.pending then C.ov = C.pending and { pending = true } or nil; gsync()
     else U.S.port = nil; U.S.overlay = nil; U.sync { nojump = true } end
   end,
 }
